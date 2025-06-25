@@ -73,6 +73,7 @@ faultdef
     FAIL_GENERIC,
     NOT_YET_IMPLEMENTED,
     MISSING_PAYLOAD,
+    PAYLOAD_ALREADY_INITIALIZED,
     INVALID_PARAMETER,
     INVALID_ALIGNMENT,
     OUT_OF_RESOURCES,
@@ -88,8 +89,8 @@ faultdef
     BAD_W_HMAC,
     BAD_O_HMAC,
     BAD_PAYLOAD_LEN,
-    BAD_IV,
-    BAD_IV_SEEDS,
+    BAD_NONCE,
+    BAD_NONCE_SEEDS,
     BAD_PW_HASH,
     THREAD_BUSY,
     MISPLACED_PASSWORD_CHECK,
@@ -127,12 +128,23 @@ struct HooksTable
 
 struct WorkOrder
 {
-    char[]      input;
-    WorkType    work_type;
-    CryptoType  crypto_type;
-    uint        thread_index;
-    bool        suppress_progress;
+    char[]              input;
+    WorkType            work_type;
+    CryptoType          crypto_type;
+    uint                thread_index;
+    bool                suppress_progress;
 }
+
+
+const HEADER_ENCRYPT_OFFSET = 80; //$offsetof(P.payload_length);
+const HEADER_ENCRYPT_LENGTH = PayloadHeader.sizeof - HEADER_ENCRYPT_OFFSET;
+
+const char[] HEADER_SIGNATURE   = "_MFTAH_UNLOCKED_"[:16];
+const char[] HEADER_MAGIC       = "MFTAHFMT"[:8];
+
+const NONCE_LEN = 64;   // technically a "max" len
+const SEEDS_COUNT = 7;
+
 
 bitstruct StreamFlags : char
 {
@@ -147,10 +159,11 @@ struct PayloadHeader @packed
     MftahVersion        version;                            // 8..11
     CryptoType          crypto_type;                        // 12..13
     StreamFlags         stream_flags;                       // 14
-    char                iv_seed_step;                       // 15
-    union {                                                 // 16..79
-        char[64]        nonce;
-        char[64]        noise;
+    char                nonce_seed_step;                    // 15
+    union
+    {                                                       // 16..79
+        char[NONCE_LEN] nonce;
+        char[NONCE_LEN] noise;
     }
     // Items below are always ENCRYPTED for MFTAH files.
     uint                wrapper_digest_offset;              // 80..83
@@ -158,16 +171,13 @@ struct PayloadHeader @packed
     ulong               payload_start;                      // 88..95
     ulong               payload_length;                     // 96..103
     char                chunk_count;                        // 104
-    char[7]             iv_seeds;                           // 105..111
+    char[SEEDS_COUNT]   nonce_seeds;                        // 105..111
     char[16]            signature;                          // 112..127
     // After the signature, any amount of padding can be used by the protocol depending on the
     //   payload's CryptoType. This is why there's a set of 'offsets' in the above. Some block
     //   ciphers will use this space for other necessary information about the payload. It's up
     //   to each crypto implementation to do so.
 }
-
-const HEADER_ENCRYPT_OFFSET = 80; //$offsetof(P.payload_length);
-const HEADER_ENCRYPT_LENGTH = PayloadHeader.sizeof - HEADER_ENCRYPT_OFFSET;
 
 
 // TODO: Do I need this?
@@ -181,13 +191,13 @@ macro @w($str) @const
 }
 
 
-// Individual KeyDigestProvier types are defined in a separate location, but are referenced in this file.
-interface KeyDigestProvider
+// Implementing KeyDigestProvier types are defined in a separate location, but are referenced in this file.
+interface DigestProvider
 {
     fn char[] digest(char[]);
 }
 
-// Individual CryptoProvider types are defined in a separate location, but are referenced in this file.
+// Implementing CryptoProvider types are defined in a separate location, but are referenced in this file.
 interface CryptoProvider
 {
     fn char[] encrypt_mut(char[], ...);
@@ -197,11 +207,14 @@ interface CryptoProvider
 
 struct Payload
 {
+    bool                is_initialized;
+
     HooksTable          hooks;
 
+    Xoshiro256pp        prng;
+
     PayloadHeader*      header_start;
-    void*               data_start;
-    ulong               data_length;
+    char[]              data;
     char                expected_num_chunks;
 
     bool                is_streamed;
@@ -210,30 +223,124 @@ struct Payload
     char[]              w_digest;
     char[]              o_digest;
 
-    char[]              current_iv;
+    char[]              key;
 
+    char[]              current_nonce;
+    ulong               nonce_rotation_counter;
     ulong               processed_bytes_counter;
 }
 
 
+<*
+ * Initialize the Payload meta-object with details about a buffer of
+ *   data, whether a full payload or the first block of a stream.
+ *
+ * @param [in] hooks : "A set of function pointers for the MFTAH payload to utilize during operations."
+ *>
 fn void? Payload.init(&self, HooksTable hooks)
 {
-    //
+    if (self.is_initialized) return PAYLOAD_ALREADY_INITIALIZED?;
+
+    // ...
+
+    self.is_initialized = true;
 }
 
 
-fn char[]? Payload.generate_random_data(&self, usz length) @local
+<*
+ * Scramble select fields of the Payload with the attached PRNG, then zero the structure.
+ *>
+fn void Payload.destroy(&self)
+{
+    if (!self.is_initialized) return;
+
+    for (usz i = 0; i < self.key.len; ++i) self.key[i] = (char)(self.prng.next());
+    for (usz i = 0; i < PayloadHeader.sizeof; ++i) self.header_start[i] = (char)(self.prng.next());
+
+    for (i = 0; i < Payload.sizeof; ++i) ((char*)self)[i] = 0;
+    for (i = 0; i < Payload.sizeof; ++i) ((char*)self)[i] = 0;
+    for (i = 0; i < Payload.sizeof; ++i) ((char*)self)[i] = 0;
+
+    self.is_initialized = false;
+}
+
+
+<*
+ *
+ *>
+fn void? Payload.create_from(&self, char[] data_buffer, Fn CryptoType crypto_type, ulong header_spacing = 0, ulong extra_padding = 0)
 {
     //
 }
 
 
+alias FnStreamReadNextBlock = fn char[] ();
+
+fn void? Payload.stream_from(&self, FnStreamReadNextBlock next_block_callback, ulong header_spacing = 0, ulong extra_padding = 0)
+{
+    // basically, read the callback until len == 0, then pass the accumulated char[] buffer to 'create_from', but make sure to indicate 'stream' mode
+    //    indicating 'stream' mode is actually CRUCIAL for the encryption/decryption to succeed for mixing nonces.
+    self.is_streamed = true;
+}
+
+
+<*
+ * Use an initialized PRNG instance (attached to the Payload wrapper)
+ *   to generate a byte array of randomized values to consume.
+ *
+ * @param [&inout] destination : "The mutable destination slice where generated bytes are sequentially stored."
+ * @param [in] length : "How many bytes of data to generate and return."
+ *
+ * @require destination.len >= length : "The requested length cannot be larger than the destination slice's length."
+ *>
+fn void Payload.generate_random_data(&self, char[] destination, usz length) @local
+{
+    if (0 == length) return;
+
+    for (usz i = 0; i < length; ++i) destination[i] = (char)(self.prng.next() & 0xFF);
+}
+
+
+<*
+ * Rotate the nonce/initialization-vector to its next value. This usually occurs
+ *   as part of a change to the next 'chunk' of a payload. This doesn't use any
+ *   tricks beyond a chain of XORs and an occasional message digest to prevent
+ *   periodic data from appearing in many-chunk payloads.
+ *>
+fn void? Payload.next_nonce(&self) @local
+{
+    defer self.nonce_rotation_counter++;
+
+    // If the rotation counter is a multiple of two passes-worth over the set of IV/nonce seeds,
+    //   then use the designated digest function to change the nonce value around entirely.
+    ulong constrained_counter = (self.nonce_rotation_counter + 1) % (2 + (2 * SEEDS_COUNT));
+
+    if (0 == constrained_counter) {
+        self.current_nonce = self.make_authentication_digest()[:self.current_nonce.len];
+
+        return;
+    }
+
+    // Otherwise, just mix the current nonce with an XOR step, using nonce_seed values and the public 'stepper'.
+    //
+}
+
+
+<*
+ * Examine the fields of the pointed-to header and populate all necessary Payload
+ *   fields as if the payload is being read for the first time. This occurs when
+ *   the state of some already-loaded data might be changed and needs to be changed
+ *   once more (e.g., rekeying operations).
+ *>
 fn void? Payload.refresh_state(&self) @local
 {
-    //
+    if (null == self.header_start) return MISSING_PAYLOAD?;
 }
 
 
+<*
+ * Based on the payload's CryptoType, return a message digest (hash/hmac/etc) of the current key.
+ *>
 fn char[]? Payload.digest_key(&self) @local
 {
     //
