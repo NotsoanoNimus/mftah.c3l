@@ -1,6 +1,6 @@
 /**
  * @file xoshiro.c3
- * @brief PRNG implementations for MFTAH, using tinymt64 and Xoshiro128+.
+ * @brief PRNG implementations for MFTAH, using tinymt64 and Xoshiro256++.
  *
  * @author Zack Puhl <github@xmit.xyz>
  * @date 2025-06-25
@@ -32,9 +32,9 @@ module mftah::prng::xoshiro;
 import mftah::prng::tinymt64;
 
 
-struct Xoshiro128p
+struct Xoshiro256pp
 {
-    ulong[2]    state;
+    ulong[4]    state;
     bool        is_locked;
 }
 
@@ -43,9 +43,9 @@ fn ulong rotl(ulong x, int k) @local => ((x << k) | (x >> (64 - k)));
 
 
 <*
- * Initialize the Xoshiro128+ PRNG with a seed from a TinyMT64 run, seeded itself from RDTSC.
+ * Initialize the Xoshiro256++ PRNG with a seed from a TinyMT64 run, seeded itself from RDTSC.
  *>
-fn void Xoshiro128p.init(&self)
+fn void Xoshiro256pp.init(&self)
 {
     self.is_locked = true;
 
@@ -71,41 +71,109 @@ fn void Xoshiro128p.init(&self)
 }
 
 
-fn ulong Xoshiro128p.next_bounded(&self, ulong low, ulong high)
+
+<*
+ * @require high > low : "The upper bound must be greater than the lower bound."
+ * @require high <= (ulong.max - (ulong)2) : "The upper bound should not exceed (uint64_max - 2)."
+ *>
+fn ulong Xoshiro256pp.next_bounded(&self, ulong low, ulong high)
 {
     while (self.is_locked);
 
     self.is_locked = true;
 
-    ulong range = 1 + high - low;
+    ulong result = rotl(self.state[0] + self.state[3], 23) + self.state[0];
 
-    ulong s0 = self.state[0];
-    ulong s1 = self.state[1];
-    ulong result = s0 + s1;
+	ulong t = self.state[1] << 17;
 
-    s1 ^= s0;
+	self.state[2] ^= self.state[0];
+	self.state[3] ^= self.state[1];
+	self.state[1] ^= self.state[2];
+	self.state[0] ^= self.state[3];
 
-    self.state[0] = rotl(s0, 24) ^ s1 ^ (s1 << 16);
-    self.state[1] = rotl(s1, 37);
+	self.state[2] ^= t;
+
+	self.state[3] = rotl(self.state[3], 45);
 
     self.is_locked = false;
 
-    return (
-        (ulong)(high > low)
-        * (
-            (
-                result
-                % (
-                    (
-                        ((ulong)(0 == range) * 1)
-                        + range
-                    )
-                )
-            )
-            + low
-        )
-    );
+	return (result % (high - low)) + low;
 }
 
 
-fn ulong Xoshiro128p.next(&self) => self.next_bounded(0, ulong.max ^ (ulong)1);
+fn ulong Xoshiro256pp.next(&self) => self.next_bounded(0, ulong.max - (ulong)2);
+
+
+const ulong[4] JUMP = { 0x180ec6d33cfd0aba, 0xd5a61266f0c9392c, 0xa9582618e03fc9aa, 0x39abdc4529b1661c };
+
+/**
+ * This is the jump function for the generator. It is equivalent
+ *  to 2^128 calls to next(); it can be used to generate 2^128
+ *  non-overlapping subsequences for parallel computations.
+ */
+fn void Xoshiro256pp.jump(&self)
+{
+	ulong s0 = 0;
+	ulong s1 = 0;
+	ulong s2 = 0;
+	ulong s3 = 0;
+
+	for (int i = 0; i < JUMP.len; ++i)
+    {
+		for (int b = 0; b < 64; ++b)
+        {
+			if (JUMP[i] & (ulong)1 << b)
+            {
+				s0 ^= self.state[0];
+				s1 ^= self.state[1];
+				s2 ^= self.state[2];
+				s3 ^= self.state[3];
+			}
+
+			(void)self.next();
+		}
+    }
+		
+	self.state[0] = s0;
+	self.state[1] = s1;
+	self.state[2] = s2;
+	self.state[3] = s3;
+}
+
+
+const ulong[4] LONG_JUMP = { 0x76e15d3efefdcbbf, 0xc5004e441c522fb3, 0x77710069854ee241, 0x39109bb02acbe635 };
+
+/**
+ * This is the long-jump function for the generator. It is equivalent to
+ *  2^192 calls to next(); it can be used to generate 2^64 starting points,
+ *  from each of which jump() will generate 2^64 non-overlapping
+ *  subsequences for parallel distributed computations.
+ */
+fn void Xoshiro256pp.long_jump(&self)
+{
+	ulong s0 = 0;
+	ulong s1 = 0;
+	ulong s2 = 0;
+	ulong s3 = 0;
+
+	for (int i = 0; i < 4; ++i)
+    {
+		for (int b = 0; b < 64; ++b)
+        {
+			if (LONG_JUMP[i] & (ulong)1 << b)
+            {
+				s0 ^= self.state[0];
+				s1 ^= self.state[1];
+				s2 ^= self.state[2];
+				s3 ^= self.state[3];
+			}
+
+			(void)self.next();	
+		}
+    }
+		
+	self.state[0] = s0;
+	self.state[1] = s1;
+	self.state[2] = s2;
+	self.state[3] = s3;
+}
