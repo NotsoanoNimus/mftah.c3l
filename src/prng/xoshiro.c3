@@ -97,7 +97,7 @@ fn ulong Xoshiro256pp.next_bounded(&self, ulong low, ulong high)
 
     self.is_locked = false;
 
-	return (result % (high - low)) + low;
+	return (result % ((ulong)1 + high - low)) + low;
 }
 
 

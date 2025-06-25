@@ -3,7 +3,10 @@
 #
 
 c3c compile-test --libdir .. --lib mftah $(find ./test/ -type f -name '*.c3t')
+TEST_RESULT=$?
 [[ -e testrun ]] && \rm testrun
+
+[[ $TEST_RESULT -ne 0 ]] && exit 1
 
 
 for integration in `find ./test/ -type f -name '*.c3'`; do
