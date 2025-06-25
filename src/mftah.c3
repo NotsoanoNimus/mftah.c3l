@@ -70,8 +70,8 @@ enum CryptoType : ushort
 
 
 faultdef
-    FAIL_GENERIC,
     NOT_YET_IMPLEMENTED,
+    NOT_INITIALIZED,
     MISSING_PAYLOAD,
     PAYLOAD_ALREADY_INITIALIZED,
     INVALID_PARAMETER,
@@ -207,11 +207,11 @@ interface CryptoProvider
 
 struct Payload
 {
-    bool                is_initialized;
+    bool                is_initialized;   // track whether 'init' has been called for the instance yet
 
-    HooksTable          hooks;
+    HooksTable          hooks;   // function pointer table to use for common libc/os-specific (like 'malloc')
 
-    Xoshiro256pp        prng;
+    Xoshiro256pp        prng;   // random number generator attached to the instance.
 
     PayloadHeader*      header_start;
     char[]              data;
@@ -243,6 +243,8 @@ fn void? Payload.init(&self, HooksTable hooks)
 
     // ...
 
+    self.prng.init();
+
     self.is_initialized = true;
 }
 
@@ -250,12 +252,14 @@ fn void? Payload.init(&self, HooksTable hooks)
 <*
  * Scramble select fields of the Payload with the attached PRNG, then zero the structure.
  *>
-fn void Payload.destroy(&self)
+fn void? Payload.destroy(&self) @maydiscard
 {
-    if (!self.is_initialized) return;
+    if (!self.is_initialized) return NOT_INITIALIZED?;
 
-    for (usz i = 0; i < self.key.len; ++i) self.key[i] = (char)(self.prng.next());
-    for (usz i = 0; i < PayloadHeader.sizeof; ++i) self.header_start[i] = (char)(self.prng.next());
+    usz i;
+
+    for (i = 0; i < self.key.len; ++i) self.key[i] = (char)(self.prng.next());
+    for (i = 0; i < PayloadHeader.sizeof; ++i) ((char*)self.header_start)[i] = (char)(self.prng.next());
 
     for (i = 0; i < Payload.sizeof; ++i) ((char*)self)[i] = 0;
     for (i = 0; i < Payload.sizeof; ++i) ((char*)self)[i] = 0;
@@ -268,7 +272,7 @@ fn void Payload.destroy(&self)
 <*
  *
  *>
-fn void? Payload.create_from(&self, char[] data_buffer, Fn CryptoType crypto_type, ulong header_spacing = 0, ulong extra_padding = 0)
+fn void? Payload.create_from(&self, char[] data_buffer, CryptoType crypto_type, ulong header_spacing = 0, ulong extra_padding = 0)
 {
     //
 }
@@ -316,7 +320,8 @@ fn void? Payload.next_nonce(&self) @local
     ulong constrained_counter = (self.nonce_rotation_counter + 1) % (2 + (2 * SEEDS_COUNT));
 
     if (0 == constrained_counter) {
-        self.current_nonce = self.make_authentication_digest()[:self.current_nonce.len];
+        self.current_nonce =
+            self.make_authentication_digest(self.current_nonce)[:self.current_nonce.len]!;
 
         return;
     }
@@ -343,35 +348,54 @@ fn void? Payload.refresh_state(&self) @local
  *>
 fn char[]? Payload.digest_key(&self) @local
 {
-    //
+    return NOT_YET_IMPLEMENTED?;
 }
 
 
+<*
+ * As opposed to hashing/KDF'ing the connected 'key' value, generate an authentication digest
+ *   with the key. Some algorithms may use, e.g., PBKDF2 to get a password digest, while using
+ *   HMAC_SHA256 to make an authenticated MAC for the payload itself.
+ *
+ * @require input.len > 0 : "Input field cannot have empty contents."
+ *>
 fn char[]? Payload.make_authentication_digest(&self, char[] input) @local
 {
-    //
+    return NOT_YET_IMPLEMENTED?;
 }
 
 
+<*
+ * //
+ *>
 fn bool? Payload.try_key(&self, char[] key)
 {
-    //
+    return NOT_YET_IMPLEMENTED?;
 }
 
 
+<*
+ * //
+ *>
 fn void? Payload.encrypt(&self)
 {
-    //
+    return NOT_YET_IMPLEMENTED?;
 }
 
 
+<*
+ * //
+ *>
 fn void? Payload.decrypt(&self)
 {
-    //
+    return NOT_YET_IMPLEMENTED?;
 }
 
 
+<*
+ * //
+ *>
 fn void? Payload.flush(&self, usz requested_callback_block_size)
 {
-    //
+    return NOT_YET_IMPLEMENTED?;
 }
