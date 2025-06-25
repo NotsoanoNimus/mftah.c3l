@@ -39,6 +39,11 @@
  *  (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
  *  OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  *
+ * ========================================================================
+ * C3 code variant is available under the MIT License.
+ *
+ * Copyright (c) 2025 Zack Puhl <github@xmit.xyz>
+ *
  */
 module mftah::prng::tinymt64;
 
