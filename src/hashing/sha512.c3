@@ -5,6 +5,8 @@
 // ========================================================================================================
 module mftah::hashing::sha512;
 
+import std::hash::hmac;
+
 
 const BLOCK_SIZE = 128;
 const HASH_SIZE = 64;
@@ -15,6 +17,10 @@ struct Sha512
     ulong[8]            hash_state;
     char[BLOCK_SIZE]    buffer;
 }
+
+alias HmacSha512    = Hmac{Sha512, HASH_SIZE, BLOCK_SIZE};
+alias hmac          = hmac::hash{Sha512, HASH_SIZE, BLOCK_SIZE};
+alias pbkdf2        = hmac::pbkdf2{Sha512, HASH_SIZE, BLOCK_SIZE};
 
 macro ulong ror(ulong n, int k) @local => ((n >> k) | (n << (64 - k)));
 

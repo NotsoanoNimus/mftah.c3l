@@ -5,6 +5,9 @@
 // ========================================================================================================
 module mftah::hashing::sha256;
 
+import std::hash::hmac;
+
+
 const BLOCK_SIZE = 64;
 const HASH_SIZE = 32;
 
@@ -36,6 +39,10 @@ struct Sha256
     ulong bitcount;
     char[BLOCK_SIZE] buffer;
 }
+
+alias HmacSha256 = Hmac{Sha256, HASH_SIZE, BLOCK_SIZE};
+alias hmac = hmac::hash{Sha256, HASH_SIZE, BLOCK_SIZE};
+alias pbkdf2 = hmac::pbkdf2{Sha256, HASH_SIZE, BLOCK_SIZE};
 
 fn char[HASH_SIZE] hash(char[] data)
 {
