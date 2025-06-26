@@ -29,7 +29,7 @@
  */
 module mftah;
 
-import mftah::util;
+import mftah::util @public;
 
 
 enum MftahVersion : uint (char major, char minor, ushort release)
@@ -64,11 +64,10 @@ enum WorkType : char
     DECRYPT,
 }
 
-enum CryptoType : ushort (inline ushort raw)
+enum CryptoType : ushort
 {
-    AES_256_CBC_HMAC_SHA256     = 0x0001,
-    AEAD_CHACHA20_POLY1305      = 0x0002,
-    INITIALIZER                 = 0xFFFF,
+    AES_256_CBC_HMAC_SHA256,
+    AEAD_CHACHA20_POLY1305,
 }
 
 
@@ -125,7 +124,6 @@ struct HooksTable
     FnMemmove           memmove;
     FnMemcmp            memcmp;
     FnFree              free;
-    FnYield             yield;
     FnProgressReporter  progress;
 }
 
@@ -234,9 +232,10 @@ struct Payload
     ulong               nonce_rotation_counter;
     ulong               processed_bytes_counter;
 
-    DigestProvider*     digest_service;
-    HmacDigestProvider* hmac_service;
-    CryptoProvider*     crypto_service;
+    DigestProvider      digest_service;
+    HmacDigestProvider  o_hmac_service;
+    HmacDigestProvider  w_hmac_service;
+    CryptoProvider      crypto_service;
 }
 
 
@@ -255,9 +254,8 @@ macro PayloadHeader* @init_header(#phdr) @local
     for (i = 0; i < HEADER_MAGIC.len; ++i) #phdr.magic[i] = HEADER_MAGIC[i];
     for (i = 0; i < HEADER_SIGNATURE.len; ++i) #phdr.signature[i] = HEADER_SIGNATURE[i];
 
-    #phdr.crypto_type   = CryptoType.INITIALIZER;
-    #phdr.stream_flags  = (StreamFlags)(char)0xFF;
-
+    *((ushort*)(&#phdr.crypto_type)) = (ushort)0xFFFF;
+    #phdr.stream_flags = (StreamFlags)(char)0xFF;
 
     for (i = 0; i < NONCE_LEN; ++i) #phdr.nonce[i] = (char)(prng.next() & 0xFF);
 
@@ -290,7 +288,9 @@ fn void? Payload.init(&self, HooksTable hooks, CryptoType crypto_type)
 
     self.prng.init();
 
-    util::@set_payload_services(crypto_type, hooks.malloc, self.digest_service, self.hmac_service, self.crypto_service)!;
+    util::@set_payload_services(
+        crypto_type, hooks.malloc, self.digest_service, self.o_hmac_service,
+        self.w_hmac_service, self.crypto_service)!;
 
     self.is_initialized = true;
 }
@@ -307,6 +307,11 @@ fn void? Payload.destroy(&self) @local @maydiscard
 
     for (i = 0; i < self.key.len; ++i) self.key[i] = (char)(self.prng.next());
     for (i = 0; i < PayloadHeader.sizeof; ++i) ((char*)self.header_start)[i] = (char)(self.prng.next());
+
+    self.hooks.free(self.digest_service);
+    self.hooks.free(self.o_hmac_service);
+    self.hooks.free(self.w_hmac_service);
+    self.hooks.free(self.crypto_service);
 
     for (i = 0; i < Payload.sizeof; ++i) ((char*)self)[i] = 0;
     for (i = 0; i < Payload.sizeof; ++i) ((char*)self)[i] = 0;
@@ -463,6 +468,12 @@ fn void? stream_new(MftahStreamContext context, CryptoType crypto_type)
 
     Payload p;
     p.init(context.hooks, crypto_type)!;
+
+    // Initialize pw hasher, HMAC, and crypto services.
+    p.digest_service.iface_init();
+    p.o_hmac_service.iface_init(context.key);
+    p.w_hmac_service.iface_init(context.key);
+    // p.crypto_service.iface_init();
 
     // Set up the constructed payload header. A streamed MFTAH payload consists of a 'start' header and a 'tail' header.
     //   The former has most of the base payload information present, but fills out o_hmac, w_hmac

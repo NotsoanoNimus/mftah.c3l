@@ -57,28 +57,50 @@ macro @w($str) @const
 import mftah::hashing;
 import mftah::crypto;
 
-macro void? @set_payload_services(CryptoType crypto_type, #malloc, #hash, #hmac, #crypto)
+struct CryptoTypeToProviders @private
+{
+    CryptoType  type;
+    typeid      digest;
+    typeid      o_hmac;
+    typeid      w_hmac;
+    typeid      crypto;
+}
+
+const CryptoTypeToProviders[] TYPES_TO_PROVIDERS @local = {
+    { AES_256_CBC_HMAC_SHA256, Sha512.typeid, HmacSha256.typeid, HmacSha256.typeid, AesCtx.typeid },
+    // { AEAD_CHACHA20_POLY1305, Sha512.typeid, Poly1305.typeid, Poly1305.typeid, ChaCha20.typeid },
+};
+
+
+macro void? @set_payload_services(
+    CryptoType crypto_type, #malloc, #hash, #o_hmac, #w_hmac, #crypto)
 {
     DigestProvider* d;
-    HmacDigestProvider* h;
+    HmacDigestProvider* ho;
+    HmacDigestProvider* hw;
     CryptoProvider* c;
 
-    switch (crypto_type) {
-        case AES_256_CBC_HMAC_SHA256:
-            d = #malloc(Sha256.sizeof);
-            h = #malloc(HmacSha256.sizeof);
-            c = #malloc(AesCtx.sizeof);
+    do OUTER: {
+        foreach (mapping : TYPES_TO_PROVIDERS) {
+            if (mapping.type != crypto_type) continue;
 
-        case AEAD_CHACHA20_POLY1305:
-            d = #malloc(Sha256.sizeof);
-            h = #malloc(HmacSha256.sizeof);
-            c = #malloc(AesCtx.sizeof);
+            d  = #malloc(mapping.digest.sizeof);
+            ho = #malloc(mapping.o_hmac.sizeof);
+            hw = #malloc(mapping.w_hmac.sizeof);
+            c  = #malloc(mapping.crypto.sizeof);
 
-        default:
-            return mftah::INVALID_CRYPTO_TYPE?;
-    }
+            if (null == d || null == ho || null == hw || null == c) {
+                return mftah::OUT_OF_RESOURCES?;
+            }
 
-    #hash   = d;
-    #hmac   = h;
-    #crypto = c;
+            break OUTER;
+        }
+
+        return mftah::INVALID_CRYPTO_TYPE?;
+    } while (true);
+
+    #hash   = *d;
+    #o_hmac = *ho;
+    #w_hmac = *hw;
+    #crypto = *c;
 }
