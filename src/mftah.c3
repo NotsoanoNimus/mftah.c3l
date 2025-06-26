@@ -29,13 +29,15 @@
  */
 module mftah;
 
+import mftah::util;
+
 
 enum MftahVersion : uint (char major, char minor, ushort release)
 {
     INITIAL_RELEASE         = { 1, 0, 0 },
     DYNAMIC_CRYPTO          = { 2, 0, 512 }
 }
-const MftahVersion CURRENT = DYNAMIC_CRYPTO;
+const MftahVersion CURRENT_VERSION = DYNAMIC_CRYPTO;
 
 enum LogLevel : char (inline char raw)
 {
@@ -62,10 +64,11 @@ enum WorkType : char
     DECRYPT,
 }
 
-enum CryptoType : ushort
+enum CryptoType : ushort (inline ushort raw)
 {
-    AES_256_CBC_HMAC_SHA256,
-    AEAD_CHACHA20_POLY1305,
+    AES_256_CBC_HMAC_SHA256     = 0x0001,
+    AEAD_CHACHA20_POLY1305      = 0x0002,
+    INITIALIZER                 = 0xFFFF,
 }
 
 
@@ -140,7 +143,7 @@ const HEADER_ENCRYPT_OFFSET = 80; //$offsetof(P.payload_length);
 const HEADER_ENCRYPT_LENGTH = PayloadHeader.sizeof - HEADER_ENCRYPT_OFFSET;
 
 const char[] HEADER_SIGNATURE   = "_MFTAH_UNLOCKED_"[:16];
-const char[] HEADER_MAGIC       = "MFTAHFMT"[:8];
+const char[] HEADER_MAGIC       = "MFTAHENC"[:8];
 
 const NONCE_LEN = 64;   // technically a "max" len
 const SEEDS_COUNT = 7;
@@ -149,8 +152,8 @@ const SEEDS_COUNT = 7;
 bitstruct StreamFlags : char
 {
     bool                enabled     : 0;
-    char                chunk_size  : 1..6;
-    bool                canary      : 7;
+    bool                canary      : 1;
+    char                size_factor : 2..7;
 }
 
 struct PayloadHeader @packed
@@ -180,21 +183,23 @@ struct PayloadHeader @packed
 }
 
 
-// TODO: Do I need this?
-macro @w($str) @const
-{
-    $if $defined(MFTAH_WIDESTR) :
-        return $$wstr16($str);
-    $else
-        return $str;
-    $endif
-}
-
-
 // Implementing KeyDigestProvier types are defined in a separate location, but are referenced in this file.
 interface DigestProvider
 {
-    fn char[] digest(char[]);
+    fn char[] iface_digest(char[]);
+
+    fn void iface_init();
+    fn void iface_update(char[]);
+    fn char[] iface_final();
+}
+
+interface HmacDigestProvider
+{
+    fn char[] iface_digest(char[], char[]);
+
+    fn void iface_init(char[]);
+    fn void iface_update(char[]);
+    fn char[] iface_final();
 }
 
 // Implementing CryptoProvider types are defined in a separate location, but are referenced in this file.
@@ -228,6 +233,46 @@ struct Payload
     char[]              current_nonce;
     ulong               nonce_rotation_counter;
     ulong               processed_bytes_counter;
+
+    DigestProvider*     digest_service;
+    HmacDigestProvider* hmac_service;
+    CryptoProvider*     crypto_service;
+}
+
+
+<*
+ * Perform the most basic initialization of a payload header possible for a new payload. This is essentially
+ *   a process of adding in all signatures and setting to-be-filled data bits to 1. This process ensures that
+ *   fields like the 'stream canary' can be purposefully turned off to indicate a set value.
+ *>
+macro PayloadHeader* @init_header(#phdr) @local
+{
+    usz i = 0;
+
+    Xoshiro256pp prng @noinit;
+    prng.init();
+
+    for (i = 0; i < HEADER_MAGIC.len; ++i) #phdr.magic[i] = HEADER_MAGIC[i];
+    for (i = 0; i < HEADER_SIGNATURE.len; ++i) #phdr.signature[i] = HEADER_SIGNATURE[i];
+
+    #phdr.crypto_type   = CryptoType.INITIALIZER;
+    #phdr.stream_flags  = (StreamFlags)(char)0xFF;
+
+
+    for (i = 0; i < NONCE_LEN; ++i) #phdr.nonce[i] = (char)(prng.next() & 0xFF);
+
+    for (i = 0; i < SEEDS_COUNT; ++i) #phdr.nonce_seeds[i] = (char)(prng.next() & 0xFF);
+    #phdr.nonce_seed_step = (char)(prng.next() & 0xFF);
+
+    #phdr.version = CURRENT_VERSION;
+
+    #phdr.wrapper_digest_offset     = 0xFFFF_FFFF;
+    #phdr.original_digest_offset    = 0xFFFF_FFFF;
+    #phdr.payload_start             = 0xFFFF_FFFF_FFFF_FFFF;
+    #phdr.payload_length            = 0xFFFF_FFFF_FFFF_FFFF;
+    #phdr.chunk_count               = 0xFF;
+
+    return #phdr;
 }
 
 
@@ -237,13 +282,15 @@ struct Payload
  *
  * @param [in] hooks : "A set of function pointers for the MFTAH payload to utilize during operations."
  *>
-fn void? Payload.init(&self, HooksTable hooks)
+fn void? Payload.init(&self, HooksTable hooks, CryptoType crypto_type)
 {
     if (self.is_initialized) return PAYLOAD_ALREADY_INITIALIZED?;
 
     // ...
 
     self.prng.init();
+
+    util::@set_payload_services(crypto_type, hooks.malloc, self.digest_service, self.hmac_service, self.crypto_service)!;
 
     self.is_initialized = true;
 }
@@ -252,7 +299,7 @@ fn void? Payload.init(&self, HooksTable hooks)
 <*
  * Scramble select fields of the Payload with the attached PRNG, then zero the structure.
  *>
-fn void? Payload.destroy(&self) @maydiscard
+fn void? Payload.destroy(&self) @local @maydiscard
 {
     if (!self.is_initialized) return NOT_INITIALIZED?;
 
@@ -275,16 +322,6 @@ fn void? Payload.destroy(&self) @maydiscard
 fn void? Payload.create_from(&self, char[] data_buffer, CryptoType crypto_type, ulong header_spacing = 0, ulong extra_padding = 0)
 {
     //
-}
-
-
-alias FnStreamReadNextBlock = fn char[] ();
-
-fn void? Payload.stream_from(&self, FnStreamReadNextBlock next_block_callback, ulong header_spacing = 0, ulong extra_padding = 0)
-{
-    // basically, read the callback until len == 0, then pass the accumulated char[] buffer to 'create_from', but make sure to indicate 'stream' mode
-    //    indicating 'stream' mode is actually CRUCIAL for the encryption/decryption to succeed for mixing nonces.
-    self.is_streamed = true;
 }
 
 
@@ -398,4 +435,74 @@ fn void? Payload.decrypt(&self)
 fn void? Payload.flush(&self, usz requested_callback_block_size)
 {
     return NOT_YET_IMPLEMENTED?;
+}
+
+
+alias FnStreamReadNextBlock = fn char[] ();
+alias FnStreamYieldBlock = FnYield;
+
+const MIN_STREAM_BLOCK_SIZE_FACTOR = 1;
+const MAX_STREAM_BLOCK_SIZE_FACTOR = 16;
+
+struct MftahStreamContext
+{
+    HooksTable hooks;
+    char[] key;
+    char block_size_factor;
+    FnStreamReadNextBlock next_block_callback;
+    FnStreamYieldBlock yield_callback;
+}
+
+<*
+ * @require context.block_size_factor >= MIN_STREAM_BLOCK_SIZE_FACTOR : "Block size factor cannot be smaller than 1 (16 MiB)."
+ * @require context.block_size_factor <= MAX_STREAM_BLOCK_SIZE_FACTOR : "Block size factor cannot be greater than 16 (256 MiB)."
+ *>
+fn void? stream_new(MftahStreamContext context, CryptoType crypto_type)
+{
+    ulong stream_block_size = ((ulong)context.block_size_factor << 4) * (1024 * 1024);
+
+    Payload p;
+    p.init(context.hooks, crypto_type)!;
+
+    // Set up the constructed payload header. A streamed MFTAH payload consists of a 'start' header and a 'tail' header.
+    //   The former has most of the base payload information present, but fills out o_hmac, w_hmac
+    p.header_start = context.hooks.malloc(PayloadHeader.sizeof);
+    if (null == p.header_start) return OUT_OF_RESOURCES?;
+
+    PayloadHeader* hdr = @init_header(p.header_start);
+    hdr.crypto_type = crypto_type;
+    hdr.stream_flags = { .enabled = true, .canary = false, .size_factor = context.block_size_factor };
+
+    // Encrypt the start header at the encryption boundary.
+
+    // Set up the encryption buffer.
+    void* working_buffer = context.hooks.calloc(1, stream_block_size);
+    if (null == working_buffer) return OUT_OF_RESOURCES?;
+
+    char[] buff = ((char*)working_buffer)[:stream_block_size];
+    defer {
+        context.hooks.memset(buff.ptr, 0x00, stream_block_size);
+        context.hooks.free(buff.ptr);
+    }
+
+    // basically, read the callback until len == 0, then pass the accumulated char[] buffer to 'create_from', but make sure to indicate 'stream' mode
+    //    indicating 'stream' mode is actually CRUCIAL for the encryption/decryption to succeed for mixing nonces.
+    // ^ NOT TRUE -- the point of 'streaming' is to reduce the memory usage of the format to a single chunk size.
+    //                The stream functionality itself must operate through a single while-loop where the chunked input is being read...
+
+    // Might be best to use single-entry 'stream_create' and 'stream_decrypt' module-level functions for this.
+
+    // Pull in the data w/ 'next_block', manipulate it however necessary, then call 'yield' to 'submit' the manipulated data to the next part of the pipeline.
+
+    // ...
+
+    //self.is_streamed = true;
+}
+
+
+fn void? stream_decrypt(MftahStreamContext context)
+{
+    // while (next_block.len) ... next_block = next_block_callback();
+
+    // while (data_ptr != end_ptr) yield_callback(block[..]);
 }

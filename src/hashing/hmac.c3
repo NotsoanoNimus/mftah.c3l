@@ -6,10 +6,17 @@
 module mftah::hashing::hmac{HashAlg, HASH_BYTES, BLOCK_BYTES};
 
 
-struct Hmac
+struct Hmac (HmacDigestProvider)
 {
 	HashAlg a, b;
 }
+
+
+fn char[] Hmac.iface_digest(&self, char[] key, char[] data)	@dynamic => hash(key, data)[..];
+fn void Hmac.iface_init(&self, char[] key) 					@dynamic => self.init(key);
+fn void Hmac.iface_update(&self, char[] data) 				@dynamic => self.update(data);
+fn char[] Hmac.iface_final(&self) 							@dynamic => self.final()[..];
+
 
 fn char[HASH_BYTES] hash(char[] key, char[] message)
 {
@@ -71,7 +78,7 @@ fn void Hmac.init(&self, char[] key)
 	self.b.init();
 	self.b.update(&buffer);
 
-	mem::zero_volatile(&buffer);
+	//mem::zero_volatile(&buffer);
 }
 
 fn void Hmac.update(&self, char[] data)

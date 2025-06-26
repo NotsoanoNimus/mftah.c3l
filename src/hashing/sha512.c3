@@ -5,7 +5,7 @@
 // ========================================================================================================
 module mftah::hashing::sha512;
 
-import std::hash::hmac;
+import mftah::hashing::hmac;
 
 
 const BLOCK_SIZE = 128;
@@ -21,6 +21,11 @@ struct Sha512
 alias HmacSha512    = Hmac{Sha512, HASH_SIZE, BLOCK_SIZE};
 alias hmac          = hmac::hash{Sha512, HASH_SIZE, BLOCK_SIZE};
 alias pbkdf2        = hmac::pbkdf2{Sha512, HASH_SIZE, BLOCK_SIZE};
+
+fn char[] Sha512.iface_digest(&self, char[] data)   @dynamic => hash(data)[..];
+fn void Sha512.iface_init(&self)                    @dynamic => self.init();
+fn void Sha512.iface_update(&self, char[] data)     @dynamic => self.update(data);
+fn char[] Sha512.iface_final(&self)                 @dynamic => self.final()[..];
 
 macro ulong ror(ulong n, int k) @local => ((n >> k) | (n << (64 - k)));
 

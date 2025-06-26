@@ -5,7 +5,7 @@
 // ========================================================================================================
 module mftah::hashing::sha256;
 
-import std::hash::hmac;
+import mftah::hashing::hmac;
 
 
 const BLOCK_SIZE = 64;
@@ -33,7 +33,7 @@ macro uint @_sigma1(uint x) @local => @rotr(x, 6) ^ @rotr(x, 11) ^ @rotr(x, 25);
 macro uint @sigma0(uint x) @local => @rotr(x, 7) ^ @rotr(x, 18) ^ (x >> 3);
 macro uint @sigma1(uint x) @local => @rotr(x, 17) ^ @rotr(x, 19) ^ (x >> 10);
 
-struct Sha256
+struct Sha256 (DigestProvider)
 {
     uint[8] state;
     ulong bitcount;
@@ -44,6 +44,13 @@ alias HmacSha256 = Hmac{Sha256, HASH_SIZE, BLOCK_SIZE};
 alias hmac = hmac::hash{Sha256, HASH_SIZE, BLOCK_SIZE};
 alias pbkdf2 = hmac::pbkdf2{Sha256, HASH_SIZE, BLOCK_SIZE};
 
+
+fn char[] Sha256.iface_digest(&self, char[] data)   @dynamic => hash(data)[..];
+fn void Sha256.iface_init(&self)                    @dynamic => self.init();
+fn void Sha256.iface_update(&self, char[] data)     @dynamic => self.update(data);
+fn char[] Sha256.iface_final(&self)                 @dynamic => self.final()[..];
+
+
 fn char[HASH_SIZE] hash(char[] data)
 {
     Sha256 sha256 @noinit;
@@ -51,6 +58,7 @@ fn char[HASH_SIZE] hash(char[] data)
     sha256.update(data);
     return sha256.final();
 }
+
 
 fn void Sha256.init(&self)
 {
@@ -69,11 +77,13 @@ fn void Sha256.init(&self)
     };
 }
 
+
 <*
  @param [in] data
  @require data.len <= uint.max
 *>
-fn void Sha256.update(&self, char[] data) {
+fn void Sha256.update(&self, char[] data)
+{
     uint i = 0;
     uint len = data.len;
     uint buffer_pos = (uint)(self.bitcount / 8) % BLOCK_SIZE;
@@ -88,7 +98,9 @@ fn void Sha256.update(&self, char[] data) {
     }
 }
 
-fn char[HASH_SIZE] Sha256.final(&self) {
+
+fn char[HASH_SIZE] Sha256.final(&self)
+{
     char[HASH_SIZE] hash;
     ulong i = (self.bitcount / 8) % BLOCK_SIZE;
 
