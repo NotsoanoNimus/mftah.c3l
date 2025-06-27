@@ -33,50 +33,57 @@ fn void free(void* ptr) => libc::free(ptr);
 const BLOCK_SIZE = (1 << 4) * (1024 * 1024);
 
 usz ctr = 0;
-char[] data = $embed("misc/test_input.data");
+char[] data_const = $embed("misc/test_input.data");
+char[] data = {};
 
 fn char[] next_block()
 {
-    if (ctr >= data.len) return {};
+    if (ctr >= data_const.len) return malloc(1)[:0];
 
-    char[] block = (data.len - ctr) < BLOCK_SIZE
-        ? data[ctr : BLOCK_SIZE]
-        : data[ctr : (data.len - ctr)];
+    usz span = (data_const.len - ctr) < BLOCK_SIZE ? (data_const.len - ctr) : BLOCK_SIZE;
 
-    ctr += BLOCK_SIZE;
+    io::printf("READ_BLOCK at (%d [:%d] / %d)...\n", ctr, span, data_const.len);
+    data[:span] = data_const[ctr:span];
 
-    return block;
+    ctr += span;
+
+    return data[:span];
 }
 
-fn void yield(char[] data) => util::@slicedump(libc::printf, data[:util::@min(64, data.len)]);
+fn void yield(char[] data) => util::@slicedump(libc::printf, data[:util::@min(128, data.len)], 32);
 
 
 const ZString IMMUTABLE_STRING = "!";
 
 fn void main()
 {
-    char[] sequence = util::@pkcs7(
-        libc::realloc,
-        aes::BLOCKLEN,
-        libc::strdup(IMMUTABLE_STRING)[:libc::strlen(IMMUTABLE_STRING)]
-    )!!;
-    // char[] key = "1234_APPLE_SAUCE1234_APPLE_SAUCE";
-    char[] key = x"603deb1015ca71be2b73aef0857d77811f352c073b6108d72d9810a30914dff4"[..];
-    char[] iv = x"10101010101010101010101010101010"[..];
+    char[] key = "applesauce";
+    data = calloc(BLOCK_SIZE)[:BLOCK_SIZE];
+    // usz testlen = BLOCK_SIZE*16 + (1024*1024); data_const = calloc(testlen)[:testlen];
 
-    AesCtx* c = calloc(AesCtx.sizeof);
-    CryptoProvider p = c;
+    char[] test = sha256::hmac(sha256::hash(key)[..], data_const)[..];
+    util::@slicedump(io::printf, test);
 
-    p.iface_init(key, iv);
+    // char[] sequence = util::@pkcs7(
+    //     aes::BLOCKLEN,
+    //     libc::strdup(IMMUTABLE_STRING)[:libc::strlen(IMMUTABLE_STRING)]
+    // )!!;
+    // char[] key = x"603deb1015ca71be2b73aef0857d77811f352c073b6108d72d9810a30914dff4"[..];
+    // char[] iv = x"10101010101010101010101010101010"[..];
 
-    p.encrypt_mut(sequence);
-    util::@slicedump(io::printf, sequence);
+    // AesCtx* c = calloc(AesCtx.sizeof);
+    // CryptoProvider p = c;
 
-    p.update_iv(iv);
-    p.decrypt_mut(sequence);
-    util::@slicedump(io::printf, util::@unpkcs7(p.block_size(), sequence)!!);
+    // p.iface_init(key, iv)!!;
 
-    return;
+    // p.encrypt_mut(sequence)!!;
+    // util::@slicedump(io::printf, sequence);
+
+    // p.update_iv(iv)!!;
+    // p.decrypt_mut(sequence)!!;
+    // util::@slicedump(io::printf, util::@unpkcs7(p.block_size(), sequence)!!);
+
+    // return;
 
     HooksTable hooks = {
         .malloc = &libc::malloc,

@@ -27,6 +27,8 @@
 // ===========================================================================================================
 module mftah::crypto::aes;
 
+import mftah::util;
+
 
 /*
 Port of github.com/kokke/tiny-aes-c
@@ -82,23 +84,29 @@ struct AesCtx (CryptoProvider)
 }
 
 
-fn void AesCtx.iface_init(&self, char[] key, char[] iv) @dynamic => (void)self.init_with_iv(AES256, key, iv);
+fn void? AesCtx.iface_init(&self, char[] key, char[] iv) @dynamic => (void)self.init_with_iv(AES256, key, iv)!;
 
-fn char[] AesCtx.encrypt_mut(&self, char[] input) @dynamic
+fn char[]? AesCtx.encrypt_mut(&self, char[] input) @dynamic
 {
 	cbc::encrypt_buffer(self, input, input);
+
 	return input;
 }
 
-fn char[] AesCtx.decrypt_mut(&self, char[] input) @dynamic
+fn char[]? AesCtx.decrypt_mut(&self, char[] input) @dynamic
 {
 	cbc::decrypt_buffer(self, input, input);
-	return input;
+
+	return util::@unpkcs7(BLOCKLEN, input);
 }
 
-fn void AesCtx.update_iv(&self, char[] new_iv) @dynamic => (void)self.set_iv(new_iv);
+fn void? AesCtx.update_iv(&self, char[] new_iv) @dynamic => (void)self.set_iv(new_iv)!;
+
+fn char[]? AesCtx.pad(&self, char[] input) @dynamic => util::@pkcs7(BLOCKLEN, input);
+fn char[]? AesCtx.unpad(&self, char[] input) @dynamic => util::@unpkcs7(BLOCKLEN, input);
 
 fn usz AesCtx.block_size(&self) @dynamic => BLOCKLEN;
+fn usz AesCtx.iv_size(&self) @dynamic => BLOCKLEN;
 
 
 <*
@@ -130,8 +138,10 @@ fn AesCtx*? AesCtx.init_with_iv(&self, AesKey type, char[] key, char[] iv)
 <*
 @require iv.len == BLOCKLEN : "iv length should be equal to BLOCKLEN."
 *>
-fn AesCtx* AesCtx.set_iv(&self, char[] iv)
+fn AesCtx*? AesCtx.set_iv(&self, char[] iv)
 {
+	if (iv.len < BLOCKLEN) return INVALID_IV_LENGTH?;
+
 	self.iv[:BLOCKLEN] = iv[:BLOCKLEN];
 	return self;
 }

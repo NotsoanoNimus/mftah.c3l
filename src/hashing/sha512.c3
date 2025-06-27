@@ -20,7 +20,7 @@ struct Sha512
 
 alias HmacSha512    = Hmac{Sha512, HASH_SIZE, BLOCK_SIZE};
 alias hmac          = hmac::hash{Sha512, HASH_SIZE, BLOCK_SIZE};
-alias pbkdf2        = hmac::pbkdf2{Sha512, HASH_SIZE, BLOCK_SIZE};
+// alias pbkdf2        = hmac::pbkdf2{Sha512, HASH_SIZE, BLOCK_SIZE};
 
 fn char[] Sha512.iface_digest(Sha512 *self, char[] data)   @dynamic => hash(data)[..];
 fn void Sha512.iface_init(Sha512 *self)                    @dynamic => self.init();

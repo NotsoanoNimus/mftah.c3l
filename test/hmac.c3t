@@ -1,0 +1,129 @@
+/**
+ * Copyright (c) 2025 Zack Puhl <github@xmit.xyz> - https://github.com/NotsoanoNimus/mftah.c3l
+ * 
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ * copies of the Software, and to permit persons to whom the Software is
+ * furnished to do so, subject to the following conditions:
+ * 
+ * The above copyright notice and this permission notice shall be included in all
+ * copies or substantial portions of the Software.
+ * 
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ * SOFTWARE.
+ *
+ */
+module mftah_test::hmac @test;
+
+import mftah::hashing @public;
+
+import std::io;
+import libc;
+
+import std::core::test;
+
+
+struct HmacPair
+{
+    char[]  input_data;
+    char[]  expected_hmac;
+}
+
+const char[] KEY = x"6384e40c6c803bddae9d9348f39747a503cfe2edcc2eb1cbdfd87e065cfb5bfc";
+
+const HmacPair[] EXPECTED_RESULTS = {
+    { "", x"02ad018dbefcc5e73cd67fc6a88ace564611d6f52bde12dd8dca01520ac2bb01" },
+    { "test", x"b0b5b3a5ccd0751d7a66e1b81877740484906664feafcb9ed75097df680732dd" },
+};
+
+fn void simple_checks()
+{
+    foreach (pair : EXPECTED_RESULTS) {
+        test::@check(sha256::hmac(KEY, pair.input_data)[..] == pair.expected_hmac);
+    }
+}
+
+
+// 1 << 0 zeroes, 1 << 1, 1 << 2, et al.
+const char[][] SHIFT_RESULTS = {
+    x"e01dd13d1df2b8e1a108970995903ece621a3295ea67a51f488fbd786de9a48f",
+    x"28290f61c5eca191f2ce95b627e94ae56438e8d8b93ae09e644f6b5ca71d516b",
+    x"7dce5276eef907678ff450530e5ddf001ef7dd3a46b9943d4331be21975b671c",
+    x"b3c220c4e9fe0f35bc2828f21577f70395c7ce4e0ea2629647c5ff31ad71c7cf",
+    x"0896453495bd371ef98c974b40931a33bafbbc09178d84ca1ba7f4724d296102",
+    x"271eb09398683a06d66f7af1ec3e589f0fc1ef80ea714f06c3c431f258b86537",
+    x"560ea3e7827beba542fda51f3e1d387ddc1baf2bbf50f68dc71b784a85b5621b",
+    x"61ebb4aecc611018a1f1e996e9af974c0e0fc8497a6158686687855fcb5f1d56",
+    x"fcec57ecaed151b23feba80e0434161aa825e88e71214d3d0a97cb9aba6741a4",
+    x"9cd942fe5830cbfc91c522800378ac4eef26c8fa429d757a97e2f395beed5fbd",
+    x"80e9744e79512cd1ac42a67dbda870d482f783d23d219fc1084ba7f17a9b288d",
+    x"32ca60d6c21d666f6a315422e1601af7ad8cb4086a068d87e43d13a324571772",
+    x"e72abb54ad66260d3b68fe774e1f59f116365c013828fd158fbbfb614fa4abf9",
+    x"08036055a0a2e37c8a44424c1fcf52d68d8abf71733b5a8d4be0f2ae5b06a0ea",
+    x"bcdd51a74de5f5c9bccd048150cef36d004ff554034d516163a227215289bb80",
+    x"42ed9255dd76b3eabf9a4140b8917eea1a46a5b4520a5ea6a8ce66728e421535",
+    x"58119658e97f2a005672158b20aa07dff90d4292f05e7fa0c16ee9e6bfe0cfad",
+    x"e6551e91de7eccef68a719e570d364335d1d63b8e25f81f8826099c93ea5c63a",
+    x"1f74fc0928ed677c924c4c48fde23e375938fec7b5110c025e1e00848b7fa534",
+    x"ffe472f8d3e64e76c2da44ffe3b13c5e4062d991acb705ff61cc08b2cc5f4363",
+    x"4241084fbdd3447914ae955ffdbcd5d9f54fe9312cfac4c2aeaa332fea053108",
+    x"4bf666bd06ed86cec6006818f9015967d143b8d853e84b8b2a5f7c82a92e9702",
+    x"3187db76e3afc43264cb8ef55d7b36b7e1bc306d24e595a2d5d0de13a85d1b47",
+    x"21126e50e93bc78ef26cf9ca957ff58dab0667617bc56ea1160150fca5c7e3b2",
+    x"de7aefe327a045d180035e227ae2e854330bfd9eb65b50ec6d1f150c57886012",
+    x"4648df61263584d8f5fc46e84668a3934f3ab13dd18d3eb1eb248b3d6e8f73bd",
+    x"70b945730eeea2dea0a8c7da3f14de0f57a26c8d34cfcd2777fa4d348b630f53",
+    x"a965495b7b09ced0af4b502bb6bc1d237d870004ca5d1512fa3d14890328ad15",
+    x"cfb56fc593348d029742b02a2c86a66b42e2341edb47db21fdc521d9e8cbc0b9",
+    x"bcb42d11130f3444ff7214829970bf519ea57600f91672647ca129f33fe29ffe",
+    x"0e6f0c5859a2c9b93d7aa123003673488c6de7c53dcf4deacb6cd1a07bc57326",
+    x"f2e5a995daf5d7181f6c3e5b1eb3e9ed3ff37440bfb8c73d84730a20a3b30595",
+    // x"510d8f8c19964116a511b88b97e751e8f0578c4c282dc05414706731d14ed96c",
+};
+
+fn void shift_checks()
+{
+    for (usz i = 0; i < SHIFT_RESULTS.len; ++i) {
+        char[] v = calloc((ulong)1 << i)[:((ulong)1 << i)];
+        assert(null != v.ptr);
+
+        char[] calc = sha256::hmac(KEY, v)[..];
+        test::@check(calc == SHIFT_RESULTS[i], "Mismatched on iteration #%d (%d bytes of all 0s).", i, (ulong)1 << i);
+        free(v);
+    }
+}
+
+
+// struct ZeroSizeToResultPair
+// {
+//     ulong   size;
+//     char[]  expected_hmac;
+// }
+
+// const ZeroSizeToResultPair EXPECTED_RESULTS2 = {
+//     { 1, x"" },
+//     { 2, x"" },
+//     { 250*(1024*1024), x"" },
+//     { 1, x"" },
+//     { 1, x"" },
+//     { 1, x"" },
+//     { 1, x"" },
+//     { 1, x"" },
+// }
+
+// fn void large_checks()
+// {
+//     foreach (pair : EXPECTED_RESULTS2) {
+//         char[] v = calloc(pair.size);
+//         assert(null != v);
+
+//         test::@check(sha256::hmac(KEY, pair.input_data)[..] == pair.expected_hmac);
+//     }
+// }

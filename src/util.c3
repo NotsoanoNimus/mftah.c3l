@@ -33,6 +33,8 @@ module mftah::util;
 macro @min(#x, #y) => #x < #y ? #x : #y;
 macro @max(#x, #y) => #x > #y ? #x : #y;
 
+macro char[] @aob(ptr) => ((char*)ptr)[:$sizeof(*ptr)];
+
 macro @memdump(#printf, #ptr, #len, $width = 16)
 {
     for (usz i = 0; i < #len; ++i) {
@@ -66,11 +68,11 @@ macro @w($str) @const
  * @require block_size > 0 : "The cipher's block size CANNOT equal 0."
  * @ensure return.len >= block_size : "The returned slice's length MUST be >= the cipher's block size."
  *>
-macro char[]? @pkcs7(#realloc, usz block_size, char[] input)
+macro char[]? @pkcs7(usz block_size, char[] input)
 {
     usz pad_len = block_size - (input.len % block_size);   // note: even-sized inputs get an extra block
 
-    char* new_ptr = #realloc(input.ptr, input.len + pad_len);
+    char* new_ptr = realloc(input.ptr, input.len + pad_len);
     if (null == new_ptr) return mftah::OUT_OF_RESOURCES?;
 
     for (usz i = input.len; i < (input.len + pad_len); ++i) new_ptr[i] = (char)(pad_len & 0xFF);
@@ -100,25 +102,4 @@ macro char[]? @unpkcs7(usz block_size, char[] input)
     // If padding IS the entire input, return an empty slice.
     //   Else, return the input with the padding trimmed.
     return input.len == pad_len ? input[:0] : input[..^(pad_len + 1)];
-}
-
-
-import mftah::hashing;
-import mftah::crypto;
-
-<*
- * Assign implementors to each given interface pointer expression, based on the selected crypto type/suite.
- *>
-macro void? @set_payload_services(
-    CryptoType crypto_type, #malloc, #hash, #o_hmac, #w_hmac, #crypto)
-{
-    switch (crypto_type) {
-        case AES_256_CBC_HMAC_SHA256:
-            Sha256* h = #malloc(Sha256.sizeof);             #hash = h;
-            HmacSha256* ho = #malloc(HmacSha256.sizeof);    #o_hmac = ho;
-            HmacSha256* hw = #malloc(HmacSha256.sizeof);    #w_hmac = hw;
-            AesCtx* c = #malloc(AesCtx.sizeof);             #crypto = c;
-
-        default: return mftah::INVALID_CRYPTO_TYPE?;
-    }
 }

@@ -40,9 +40,9 @@ struct Sha256 (DigestProvider)
     char[BLOCK_SIZE] buffer;
 }
 
-alias HmacSha256 = Hmac{Sha256, HASH_SIZE, BLOCK_SIZE};
-alias hmac = hmac::hash{Sha256, HASH_SIZE, BLOCK_SIZE};
-alias pbkdf2 = hmac::pbkdf2{Sha256, HASH_SIZE, BLOCK_SIZE};
+alias HmacSha256    = Hmac{Sha256, HASH_SIZE, BLOCK_SIZE};
+alias hmac          = hmac::hash{Sha256, HASH_SIZE, BLOCK_SIZE};
+// alias pbkdf2        = hmac::pbkdf2{Sha256, HASH_SIZE, BLOCK_SIZE};
 
 
 fn usz Sha256.iface_hashlen(&self) @dynamic => HASH_SIZE;
@@ -51,15 +51,17 @@ fn void Sha256.iface_update(&self, char[] data) @dynamic => self.update(data);
 fn char* Sha256.iface_final(&self) @dynamic
 {
     char[HASH_SIZE] c = self.final();
-    char* mem = malloc(HASH_SIZE);
-    for (usz i = 0; i < HASH_SIZE; ++i) mem[i] = c[i];
+    char[] mem = malloc(HASH_SIZE)[:HASH_SIZE];
+    // for (usz i = 0; i < HASH_SIZE; ++i) mem[i] = c[i];
+    mem[..] = c[..];
     return mem;
 }
 fn char* Sha256.iface_digest(&self, char[] data) @dynamic
 {
     char[HASH_SIZE] c = hash(data);
-    char* mem = malloc(HASH_SIZE);
-    for (usz i = 0; i < HASH_SIZE; ++i) mem[i] = c[i];
+    char[] mem = malloc(HASH_SIZE)[:HASH_SIZE];
+    // for (usz i = 0; i < HASH_SIZE; ++i) mem[i] = c[i];
+    mem[..] = c[..];
     return mem;
 }
 
@@ -100,7 +102,7 @@ fn void Sha256.update(&self, char[] data)
     uint i = 0;
     uint len = data.len;
     uint buffer_pos = (uint)(self.bitcount / 8) % BLOCK_SIZE;
-    self.bitcount += (ulong)(len * 8);
+    self.bitcount += ((ulong)len * 8);
 
     while (len--) {
         self.buffer[buffer_pos++] = data[i++];
