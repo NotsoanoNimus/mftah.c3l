@@ -16,6 +16,7 @@ fn char[] Hmac.iface_digest(&self, char[] key, char[] data)	@dynamic => hash(key
 fn void Hmac.iface_init(&self, char[] key) 					@dynamic => self.init(key);
 fn void Hmac.iface_update(&self, char[] data) 				@dynamic => self.update(data);
 fn char[] Hmac.iface_final(&self) 							@dynamic => self.final()[..];
+fn usz Hmac.iface_hashlen(&self)							@dynamic => HASH_BYTES;
 
 
 fn char[HASH_BYTES] hash(char[] key, char[] message)

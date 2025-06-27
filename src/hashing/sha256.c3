@@ -45,10 +45,23 @@ alias hmac = hmac::hash{Sha256, HASH_SIZE, BLOCK_SIZE};
 alias pbkdf2 = hmac::pbkdf2{Sha256, HASH_SIZE, BLOCK_SIZE};
 
 
-fn char[] Sha256.iface_digest(Sha256* self, char[] data)   @dynamic => hash(data)[..];
-fn void Sha256.iface_init(Sha256* self)                    @dynamic => self.init();
-fn void Sha256.iface_update(Sha256* self, char[] data)     @dynamic => self.update(data);
-fn char[] Sha256.iface_final(Sha256* self)                 @dynamic => self.final()[..];
+fn usz Sha256.iface_hashlen(&self) @dynamic => HASH_SIZE;
+fn void Sha256.iface_init(&self) @dynamic => self.init();
+fn void Sha256.iface_update(&self, char[] data) @dynamic => self.update(data);
+fn char* Sha256.iface_final(&self) @dynamic
+{
+    char[HASH_SIZE] c = self.final();
+    char* mem = malloc(HASH_SIZE);
+    for (usz i = 0; i < HASH_SIZE; ++i) mem[i] = c[i];
+    return mem;
+}
+fn char* Sha256.iface_digest(&self, char[] data) @dynamic
+{
+    char[HASH_SIZE] c = hash(data);
+    char* mem = malloc(HASH_SIZE);
+    for (usz i = 0; i < HASH_SIZE; ++i) mem[i] = c[i];
+    return mem;
+}
 
 
 fn char[HASH_SIZE] hash(char[] data)

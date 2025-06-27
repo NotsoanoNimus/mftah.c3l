@@ -78,6 +78,8 @@ faultdef
     PAYLOAD_ALREADY_INITIALIZED,
     INVALID_PARAMETER,
     INVALID_ALIGNMENT,
+    PAYLOAD_NOT_PADDED,
+    INVALID_PAYLOAD_PADDING,
     OUT_OF_RESOURCES,
     INVALID_SIGNATURE,
     BAD_PAYLOAD_STATE,
@@ -184,11 +186,13 @@ struct PayloadHeader @packed
 // Implementing KeyDigestProvier types are defined in a separate location, but are referenced in this file.
 interface DigestProvider
 {
-    fn char[] iface_digest(char[]);
+    fn char* iface_digest(char[]);
 
     fn void iface_init();
     fn void iface_update(char[]);
-    fn char[] iface_final();
+    fn char* iface_final();
+
+    fn usz iface_hashlen();
 }
 
 interface HmacDigestProvider
@@ -198,13 +202,20 @@ interface HmacDigestProvider
     fn void iface_init(char[]);
     fn void iface_update(char[]);
     fn char[] iface_final();
+
+    fn usz iface_hashlen();
 }
 
 // Implementing CryptoProvider types are defined in a separate location, but are referenced in this file.
 interface CryptoProvider
 {
-    fn char[] encrypt_mut(char[], ...);
-    fn char[] decrypt_mut(char[], ...);
+    fn void iface_init(char[], char[]);
+
+    fn char[] encrypt_mut(char[]);
+    fn char[] decrypt_mut(char[]);
+    fn void update_iv(char[]);
+
+    fn usz block_size();
 }
 
 
@@ -443,75 +454,89 @@ fn void? Payload.flush(&self, usz requested_callback_block_size)
 }
 
 
+alias FnYieldBlock = FnYield;
+
+struct MftahRequest
+{
+    HooksTable hooks;
+    char[] input;
+    char[] key;
+    CryptoType crypto_type;
+    FnYieldBlock yield_callback;
+}
+
+fn void? new(MftahRequest request)
+{
+    Payload p;
+    p.init(request.hooks, request.crypto_type)!;
+
+    // Initialize pw hasher, HMAC, and crypto services.
+    p.digest_service.iface_init();
+    p.o_hmac_service.iface_init(request.key);
+    p.w_hmac_service.iface_init(request.key);
+    // p.crypto_service.iface_init(request.key, p.nonce[:p.crypto_service.block_size()]);
+
+    // With a fixed input buffer, we already know what size needs to be encrypted.
+}
+
+
 alias FnStreamReadNextBlock = fn char[] ();
 alias FnStreamYieldBlock = FnYield;
 
 const MIN_STREAM_BLOCK_SIZE_FACTOR = 1;
 const MAX_STREAM_BLOCK_SIZE_FACTOR = 16;
 
-struct MftahStreamContext
+struct MftahStreamRequest
 {
     HooksTable hooks;
     char[] key;
+    CryptoType crypto_type;
     char block_size_factor;
     FnStreamReadNextBlock next_block_callback;
     FnStreamYieldBlock yield_callback;
 }
 
 <*
- * @require context.block_size_factor >= MIN_STREAM_BLOCK_SIZE_FACTOR : "Block size factor cannot be smaller than 1 (16 MiB)."
- * @require context.block_size_factor <= MAX_STREAM_BLOCK_SIZE_FACTOR : "Block size factor cannot be greater than 16 (256 MiB)."
+ * @require request.block_size_factor >= MIN_STREAM_BLOCK_SIZE_FACTOR : "Block size factor cannot be smaller than 1 (16 MiB)."
+ * @require request.block_size_factor <= MAX_STREAM_BLOCK_SIZE_FACTOR : "Block size factor cannot be greater than 16 (256 MiB)."
  *>
-fn void? stream_new(MftahStreamContext context, CryptoType crypto_type)
+fn void? stream_new(MftahStreamRequest request)
 {
-    ulong stream_block_size = ((ulong)context.block_size_factor << 4) * (1024 * 1024);
+    ulong stream_block_size = ((ulong)request.block_size_factor << 4) * (1024 * 1024);
 
     Payload p;
-    p.init(context.hooks, crypto_type)!;
-
-    // Initialize pw hasher, HMAC, and crypto services.
-    p.digest_service.iface_init();
-    p.o_hmac_service.iface_init(context.key);
-    p.w_hmac_service.iface_init(context.key);
-    // p.crypto_service.iface_init();
+    p.init(request.hooks, request.crypto_type)!;
 
     // Set up the constructed payload header. A streamed MFTAH payload consists of a 'start' header and a 'tail' header.
     //   The former has most of the base payload information present, but fills out o_hmac, w_hmac
-    p.header_start = context.hooks.malloc(PayloadHeader.sizeof);
+    p.header_start = request.hooks.malloc(PayloadHeader.sizeof);
     if (null == p.header_start) return OUT_OF_RESOURCES?;
 
     PayloadHeader* hdr = @init_header(p.header_start);
-    hdr.crypto_type = crypto_type;
-    hdr.stream_flags = { .enabled = true, .canary = false, .size_factor = context.block_size_factor };
+    hdr.crypto_type = request.crypto_type;
+    hdr.stream_flags = { .enabled = true, .canary = false, .size_factor = request.block_size_factor };
+
+    // Initialize pw hasher, HMAC, and crypto services.
+    p.digest_service.iface_init();
+    p.o_hmac_service.iface_init(request.key);
+    p.w_hmac_service.iface_init(request.key);
+    p.crypto_service.iface_init(request.key, hdr.nonce[:p.crypto_service.block_size()]);
 
     // Encrypt the start header at the encryption boundary.
 
     // Set up the encryption buffer.
-    void* working_buffer = context.hooks.calloc(1, stream_block_size);
+    void* working_buffer = request.hooks.calloc(1, stream_block_size);
     if (null == working_buffer) return OUT_OF_RESOURCES?;
 
     char[] buff = ((char*)working_buffer)[:stream_block_size];
     defer {
-        context.hooks.memset(buff.ptr, 0x00, stream_block_size);
-        context.hooks.free(buff.ptr);
+        request.hooks.memset(buff.ptr, 0x00, stream_block_size);
+        request.hooks.free(buff.ptr);
     }
-
-    // basically, read the callback until len == 0, then pass the accumulated char[] buffer to 'create_from', but make sure to indicate 'stream' mode
-    //    indicating 'stream' mode is actually CRUCIAL for the encryption/decryption to succeed for mixing nonces.
-    // ^ NOT TRUE -- the point of 'streaming' is to reduce the memory usage of the format to a single chunk size.
-    //                The stream functionality itself must operate through a single while-loop where the chunked input is being read...
-
-    // Might be best to use single-entry 'stream_create' and 'stream_decrypt' module-level functions for this.
-
-    // Pull in the data w/ 'next_block', manipulate it however necessary, then call 'yield' to 'submit' the manipulated data to the next part of the pipeline.
-
-    // ...
-
-    //self.is_streamed = true;
 }
 
 
-fn void? stream_decrypt(MftahStreamContext context)
+fn void? stream_decrypt(MftahStreamRequest request)
 {
     // while (next_block.len) ... next_block = next_block_callback();
 

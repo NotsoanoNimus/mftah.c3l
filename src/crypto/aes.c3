@@ -73,13 +73,33 @@ faultdef
  *
  */
 
-struct AesCtx
+struct AesCtx (CryptoProvider)
 {
 	AesKey type;
 	char[256] round_key;
 	char[BLOCKLEN] iv;
 	char[NB][NB] state;
 }
+
+
+fn void AesCtx.iface_init(&self, char[] key, char[] iv) @dynamic => (void)self.init_with_iv(AES256, key, iv);
+
+fn char[] AesCtx.encrypt_mut(&self, char[] input) @dynamic
+{
+	cbc::encrypt_buffer(self, input, input);
+	return input;
+}
+
+fn char[] AesCtx.decrypt_mut(&self, char[] input) @dynamic
+{
+	cbc::decrypt_buffer(self, input, input);
+	return input;
+}
+
+fn void AesCtx.update_iv(&self, char[] new_iv) @dynamic => (void)self.set_iv(new_iv);
+
+fn usz AesCtx.block_size(&self) @dynamic => BLOCKLEN;
+
 
 <*
 @require key.len == type.key_len : "Key does not match expected size."

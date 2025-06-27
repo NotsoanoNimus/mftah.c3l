@@ -51,12 +51,32 @@ fn char[] next_block()
 fn void yield(char[] data) => util::@slicedump(libc::printf, data[:util::@min(64, data.len)]);
 
 
-const ZString IMMUTABLE_STRING = "I am secured data!";
+const ZString IMMUTABLE_STRING = "!";
 
 fn void main()
 {
-    char[] sequence = (libc::strdup(IMMUTABLE_STRING))[:libc::strlen(IMMUTABLE_STRING)];
-    char[] key = "APPLE_SAUCE";
+    char[] sequence = util::@pkcs7(
+        libc::realloc,
+        aes::BLOCKLEN,
+        libc::strdup(IMMUTABLE_STRING)[:libc::strlen(IMMUTABLE_STRING)]
+    )!!;
+    // char[] key = "1234_APPLE_SAUCE1234_APPLE_SAUCE";
+    char[] key = x"603deb1015ca71be2b73aef0857d77811f352c073b6108d72d9810a30914dff4"[..];
+    char[] iv = x"10101010101010101010101010101010"[..];
+
+    AesCtx* c = calloc(AesCtx.sizeof);
+    CryptoProvider p = c;
+
+    p.iface_init(key, iv);
+
+    p.encrypt_mut(sequence);
+    util::@slicedump(io::printf, sequence);
+
+    p.update_iv(iv);
+    p.decrypt_mut(sequence);
+    util::@slicedump(io::printf, util::@unpkcs7(p.block_size(), sequence)!!);
+
+    return;
 
     HooksTable hooks = {
         .malloc = &libc::malloc,
@@ -69,5 +89,5 @@ fn void main()
         .free   = &free,
     };
 
-    mftah::stream_new({ hooks, key, 1, &next_block, &yield }, CryptoType.AES_256_CBC_HMAC_SHA256)!!;
+    mftah::stream_new({ hooks, key, CryptoType.AES_256_CBC_HMAC_SHA256, 1, &next_block, &yield })!!;
 }

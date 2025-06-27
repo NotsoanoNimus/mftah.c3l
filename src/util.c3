@@ -41,8 +41,8 @@ macro @memdump(#printf, #ptr, #len, $width = 16)
     (#printf)("\n");
 }
 
-macro @slicedump(#printf, #slice, $width = 16)
-    => @memdump(#printf, (#slice).ptr, #slice.len * $typeof(#slice[0]).sizeof, $width);
+macro @slicedump(#printf, slice, $width = 16)
+    => @memdump(#printf, slice.ptr, slice.len * $typeof(slice[0]).sizeof, $width);
 
 macro @w($str) @const
 {
@@ -54,53 +54,71 @@ macro @w($str) @const
 }
 
 
+<*
+ * PKCS#7 padding scheme for block ciphers which do not have their own padding standards (e.g., AES-CBC).
+ *   It's so easy that it's actually sus how quickly expected results were churned out...
+ *
+ * @param #realloc : "An expression which provides the LIBC realloc function, or an equivalent."
+ * @param block_size : "The block size of the cipher suite whose ingested plaintext data will be padded."
+ * @param input : "The input data to reallocate and pad."
+ * @return "A slice representing the reallocated and PKCS#7-padded plaintext."
+ *
+ * @require block_size > 0 : "The cipher's block size CANNOT equal 0."
+ * @ensure return.len >= block_size : "The returned slice's length MUST be >= the cipher's block size."
+ *>
+macro char[]? @pkcs7(#realloc, usz block_size, char[] input)
+{
+    usz pad_len = block_size - (input.len % block_size);   // note: even-sized inputs get an extra block
+
+    char* new_ptr = #realloc(input.ptr, input.len + pad_len);
+    if (null == new_ptr) return mftah::OUT_OF_RESOURCES?;
+
+    for (usz i = input.len; i < (input.len + pad_len); ++i) new_ptr[i] = (char)(pad_len & 0xFF);
+
+    return new_ptr[:(input.len + pad_len)];
+}
+
+
+<*
+ * Strip the PKCS#7 padding off the end of the provided plaintext. All this really does is
+ *   return a slice which has a shorter length by whatever the detected padding is.
+ *
+ * @param block_size : "The block size of the used cipher suite."
+ * @param input : "The input plaintext which should be un-padded."
+ * @return "A slice of the input plaintext with the trailing padding removed via the 'len' member."
+ *>
+macro char[]? @unpkcs7(usz block_size, char[] input)
+{
+    if (input.len < block_size) return mftah::PAYLOAD_NOT_PADDED?;
+
+    // The padding length in PKCS#7 can always be derived from the final byte of the padded plaintext.
+    char pad_len = input[^1];
+
+    // Of course, the padding length should never exceed the input length or the block size.
+    if (input.len < pad_len || pad_len > block_size) return mftah::INVALID_PAYLOAD_PADDING?;
+
+    // If padding IS the entire input, return an empty slice.
+    //   Else, return the input with the padding trimmed.
+    return input.len == pad_len ? input[:0] : input[..^(pad_len + 1)];
+}
+
+
 import mftah::hashing;
 import mftah::crypto;
 
-struct CryptoTypeToProviders @private
-{
-    CryptoType  type;
-    typeid      digest;
-    typeid      o_hmac;
-    typeid      w_hmac;
-    typeid      crypto;
-}
-
-const CryptoTypeToProviders[] TYPES_TO_PROVIDERS @local = {
-    { AES_256_CBC_HMAC_SHA256, Sha512.typeid, HmacSha256.typeid, HmacSha256.typeid, AesCtx.typeid },
-    // { AEAD_CHACHA20_POLY1305, Sha512.typeid, Poly1305.typeid, Poly1305.typeid, ChaCha20.typeid },
-};
-
-
+<*
+ * Assign implementors to each given interface pointer expression, based on the selected crypto type/suite.
+ *>
 macro void? @set_payload_services(
     CryptoType crypto_type, #malloc, #hash, #o_hmac, #w_hmac, #crypto)
 {
-    DigestProvider* d;
-    HmacDigestProvider* ho;
-    HmacDigestProvider* hw;
-    CryptoProvider* c;
+    switch (crypto_type) {
+        case AES_256_CBC_HMAC_SHA256:
+            Sha256* h = #malloc(Sha256.sizeof);             #hash = h;
+            HmacSha256* ho = #malloc(HmacSha256.sizeof);    #o_hmac = ho;
+            HmacSha256* hw = #malloc(HmacSha256.sizeof);    #w_hmac = hw;
+            AesCtx* c = #malloc(AesCtx.sizeof);             #crypto = c;
 
-    do OUTER: {
-        foreach (mapping : TYPES_TO_PROVIDERS) {
-            if (mapping.type != crypto_type) continue;
-
-            d  = #malloc(mapping.digest.sizeof);
-            ho = #malloc(mapping.o_hmac.sizeof);
-            hw = #malloc(mapping.w_hmac.sizeof);
-            c  = #malloc(mapping.crypto.sizeof);
-
-            if (null == d || null == ho || null == hw || null == c) {
-                return mftah::OUT_OF_RESOURCES?;
-            }
-
-            break OUTER;
-        }
-
-        return mftah::INVALID_CRYPTO_TYPE?;
-    } while (true);
-
-    #hash   = *d;
-    #o_hmac = *ho;
-    #w_hmac = *hw;
-    #crypto = *c;
+        default: return mftah::INVALID_CRYPTO_TYPE?;
+    }
 }
