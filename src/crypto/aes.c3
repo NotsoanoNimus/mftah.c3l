@@ -126,11 +126,9 @@ fn AesCtx* AesCtx.init(&self, AesKey type, char[] key)
 fn AesCtx*? AesCtx.init_with_iv(&self, AesKey type, char[] key, char[] iv)
 {
 	self.init(type, key);
-	if (iv.len < BLOCKLEN)
-	{
-		// io::eprintn("iv: not long enough?");
-		return INVALID_IV_LENGTH?;
-	}
+
+	if (iv.len < BLOCKLEN) return INVALID_IV_LENGTH?;
+
 	self.iv[:BLOCKLEN] = iv[:BLOCKLEN];
 	return self;
 }

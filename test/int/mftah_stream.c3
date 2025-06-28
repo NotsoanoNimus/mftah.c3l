@@ -28,12 +28,13 @@ import std::io;
 import libc;
 
 
-fn void free(void* ptr) => libc::free(ptr);
+fn void free(void* ptr) => (void)libc::free(ptr);
 
 const BLOCK_SIZE = (1 << 4) * (1024 * 1024);
 
 usz ctr = 0;
-char[] data_const = $embed("misc/test_input.data");
+char[] data_const = "test"[:4];
+// char[] data_const = $embed("misc/test_input.data");
 char[] data = {};
 
 fn char[] next_block()
@@ -50,7 +51,7 @@ fn char[] next_block()
     return data[:span];
 }
 
-fn void yield(char[] data) => util::@slicedump(libc::printf, data[:util::@min(128, data.len)], 32);
+fn void yield(char[] data) => util::@slicedump(libc::printf, data[:util::@min(256, data.len)], 32);
 
 
 const ZString IMMUTABLE_STRING = "!";
@@ -97,4 +98,6 @@ fn void main()
     };
 
     mftah::stream_new({ hooks, key, CryptoType.AES_256_CBC_HMAC_SHA256, 1, &next_block, &yield })!!;
+ 
+    free(data);
 }
