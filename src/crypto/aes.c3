@@ -84,6 +84,7 @@ struct AesCtx (CryptoProvider)
 }
 
 
+// TODO: Can probably just accept the 'type' here instead of using AES256 statically..
 fn void? AesCtx.iface_init(&self, char[] key, char[] iv) @dynamic => (void)self.init_with_iv(AES256, key, iv)!;
 
 fn char[]? AesCtx.encrypt_mut(&self, char[] input) @dynamic
@@ -97,7 +98,8 @@ fn char[]? AesCtx.decrypt_mut(&self, char[] input) @dynamic
 {
 	cbc::decrypt_buffer(self, input, input);
 
-	return util::@unpkcs7(BLOCKLEN, input);
+	// return util::@unpkcs7(BLOCKLEN, input);
+	return input;
 }
 
 fn void? AesCtx.update_iv(&self, char[] new_iv) @dynamic => (void)self.set_iv(new_iv)!;
@@ -307,8 +309,8 @@ fn void cbc_decrypt_buffer(AesCtx *ctx, char[] buf, char[] out)
 	{
 		ecb::decrypt_buffer(ctx, buf[i:aes::BLOCKLEN], &tmp);
 		xor_with_iv(&tmp, ctx.iv[..]);
-		out[i:aes::BLOCKLEN] = tmp[..];
 		ctx.iv[:aes::BLOCKLEN] = buf[i:aes::BLOCKLEN];
+		out[i:aes::BLOCKLEN] = tmp[..];
 	}
 }
 

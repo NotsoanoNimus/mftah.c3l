@@ -20,7 +20,7 @@
  * SOFTWARE.
  *
  */
-module mftah_stream_test;
+module mftah_stream_decrypt_test;
 
 import mftah;
 
@@ -32,15 +32,18 @@ import libc;
 fn void free(void* ptr) => (void)libc::free(ptr);
 
 usz ctr = 0;
-char[] data_const = "test"[:4];
-// char[] data_const = $embed("misc/test_input.data");
+char[] data_const = $embed("../../../../../../../../../../tmp/encrypted_stream.mftah");
 char[] data = {};
 
 File out_file;
 
+
 fn char[] next_block(usz block_size)
 {
-    if (null == data.ptr) data = calloc(block_size)[:block_size];
+    if (block_size != data.len) {
+        free(data);
+        data = calloc(block_size)[:block_size];
+    }
 
     if (ctr >= data_const.len) return malloc(1)[:0];
 
@@ -61,41 +64,15 @@ fn void yield(char[] data)
 }
 
 
-const ZString IMMUTABLE_STRING = "!";
-
 fn void main()
 {
-    defer free(data);
+    defer free(data.ptr);
+
     char[] key = "applesauce";
-    // usz testlen = BLOCK_SIZE*16 + (1024*1024); data_const = calloc(testlen)[:testlen];
 
-    char[] test = sha256::hmac(sha256::hash(key)[..], data_const)[..];
-    util::@slicedump(io::printf, test);
-
-    out_file = file::open("/tmp/encrypted_stream.mftah", "w")!!;
+    out_file = file::open("/tmp/decrypted_stream.mftah", "w")!!;
     out_file.seek(0)!!;
     defer out_file.close()!!;
-
-    // char[] sequence = util::@pkcs7(
-    //     aes::BLOCKLEN,
-    //     libc::strdup(IMMUTABLE_STRING)[:libc::strlen(IMMUTABLE_STRING)]
-    // )!!;
-    // char[] key = x"603deb1015ca71be2b73aef0857d77811f352c073b6108d72d9810a30914dff4"[..];
-    // char[] iv = x"10101010101010101010101010101010"[..];
-
-    // AesCtx* c = calloc(AesCtx.sizeof);
-    // CryptoProvider p = c;
-
-    // p.iface_init(key, iv)!!;
-
-    // p.encrypt_mut(sequence)!!;
-    // util::@slicedump(io::printf, sequence);
-
-    // p.update_iv(iv)!!;
-    // p.decrypt_mut(sequence)!!;
-    // util::@slicedump(io::printf, util::@unpkcs7(p.block_size(), sequence)!!);
-
-    // return;
 
     HooksTable hooks = {
         .malloc = &libc::malloc,
@@ -108,5 +85,5 @@ fn void main()
         .free   = &free,
     };
 
-    mftah::stream_new({ hooks, key, CryptoType.AES_256_CBC_HMAC_SHA256, 1, &next_block, &yield })!!;
+    mftah::stream_decrypt(hooks, key, &next_block, &yield)!!;
 }

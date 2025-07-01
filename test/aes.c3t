@@ -27,6 +27,7 @@
 // ===========================================================================================================
 module mftah_test::aes @test;
 
+import mftah;
 import mftah::crypto::aes @public;
 import std::io;
 
@@ -182,6 +183,19 @@ fn void test_cbc_encrypt()
 			"Test %d failed; invalid cipher; got: %s, want: %s", i+1, out, t.cipher);
 	}
 
+	CryptoProvider aes = &ctx;
+
+	char[] tmp = ((char*)malloc(tests[2].plaintext.len))[:tests[2].plaintext.len];
+	assert(null != tmp.ptr, "Out of memory");
+	tmp[..] = tests[2].plaintext[..];
+	defer free(tmp);
+
+	aes.iface_init(tests[2].key, iv)!!;
+	aes.encrypt_mut(tmp)!!;
+
+	assert(tmp[:64] == tests[2].cipher[:64],
+		"CryptoProvider encrypt test failed; invalid cipher; got: %s, want: %s", tmp, tests[2].cipher);
+
 	foreach (i, t : tests)
 	{
 		@pool()
@@ -227,6 +241,19 @@ fn void test_cbc_decrypt()
 		assert(out[:64] == t.plaintext[:64],
 			"Test %d failed; invalid plaintext; got: %s, want: %s", i+1, out, t.plaintext);
 	}
+
+	CryptoProvider aes = &ctx;
+
+	char[] tmp = ((char*)malloc(tests[2].cipher.len))[:tests[2].cipher.len];
+	assert(null != tmp.ptr, "Out of memory");
+	tmp[..] = tests[2].cipher[..];
+	defer free(tmp);
+
+	aes.iface_init(tests[2].key, iv)!!;
+	aes.decrypt_mut(tmp)!!;
+
+	assert(tmp[:64] == tests[2].plaintext[:64],
+		"CryptoProvider decrypt test failed; invalid plaintext; got: %s, want: %s", tmp, tests[2].plaintext);
 
 	foreach (i, t : tests)
 	{

@@ -80,34 +80,41 @@ enum CryptoType : ushort (inline ushort raw)
 faultdef
     NOT_YET_IMPLEMENTED,
     NOT_INITIALIZED,
-    MISSING_PAYLOAD,
     PAYLOAD_ALREADY_INITIALIZED,
-    INVALID_PARAMETER,
-    INVALID_ALIGNMENT,
-    PAYLOAD_NOT_PADDED,
-    INVALID_PAYLOAD_PADDING,
-    INVALID_OFFSET,
     OUT_OF_RESOURCES,
-    INVALID_SIGNATURE,
-    BAD_PAYLOAD_STATE,
-    PAYLOAD_NOT_DECRYPTED,
-    INVALID_PASSWORD,
-    INVALID_THREAD_COUNT,
+    INVALID_STREAM_BLOCK_SIZE,
+    MISALIGNED_STREAM_BLOCK_SIZE,
+    MISSING_PAYLOAD_HEADER,
+    INVALID_PAYLOAD_PADDING,
+    PAYLOAD_NOT_PADDED,
+    INVALID_PAYLOAD_MAGIC,
     INVALID_CRYPTO_TYPE,
-    INVALID_STREAM_STATE,
-    BAD_STREAM_BLOCK_SIZE,
-    BAD_STREAM_PAYLOAD_LENGTH,
-    BAD_W_HMAC,
-    BAD_O_HMAC,
-    BAD_PAYLOAD_LEN,
-    BAD_NONCE,
-    BAD_NONCE_SEEDS,
-    BAD_PW_HASH,
-    THREAD_BUSY,
-    MISPLACED_PASSWORD_CHECK,
-    STREAM_MISSING_POST_HEADER,
+    PAYLOAD_NOT_STREAMED,
+    INCORRECT_KEY,
     PREMATURE_END_OF_STREAM,
-    STREAM_LAST_BLOCK_TOO_LARGE
+    STREAM_MISSING_POST_HEADER,
+    BAD_WRAPPER_HMAC,
+    BAD_ORIGINAL_HMAC,
+
+    // PAYLOAD_TOO_SHORT,
+    // INVALID_PARAMETER,
+    // INVALID_ALIGNMENT,
+    // INVALID_OFFSET,
+    // INVALID_SIGNATURE,
+    // BAD_PAYLOAD_STATE,
+    // PAYLOAD_NOT_DECRYPTED,
+    // INVALID_PASSWORD,
+    // INVALID_THREAD_COUNT,
+    // INVALID_STREAM_STATE,
+    // BAD_STREAM_BLOCK_SIZE,
+    // BAD_STREAM_PAYLOAD_LENGTH,
+    // BAD_PAYLOAD_LEN,
+    // BAD_NONCE,
+    // BAD_NONCE_SEEDS,
+    // BAD_PW_HASH,
+    // THREAD_BUSY,
+    // MISPLACED_PASSWORD_CHECK,
+    // STREAM_LAST_BLOCK_TOO_LARGE
     ;
 
 alias FnMftahPrintf = fn void (LogLevel, char[], ...);
@@ -170,11 +177,7 @@ struct PayloadHeader @packed
     CryptoType          crypto_type;                        // 12..13
     StreamFlags         stream_flags;                       // 14
     char                nonce_seed_step;                    // 15
-    union
-    {                                                       // 16..79
-        char[NONCE_LEN] nonce;
-        char[NONCE_LEN] noise;
-    }
+    char[NONCE_LEN]     nonce;
     // Items below are always ENCRYPTED for MFTAH files.
     uint                wrapper_digest_offset;              // 80..83
     uint                original_digest_offset;             // 84..87
@@ -257,7 +260,6 @@ struct Payload
 
     char[]              key;
 
-    char[]              current_nonce;
     ulong               nonce_rotation_counter;
     ulong               processed_bytes_counter;
 
@@ -302,7 +304,7 @@ macro PayloadHeader* @init_header(#phdr) @local
 
     // Every roll_interval (between 4 and 12) for streamed payloads causes the IV to be hashed and
     //   the CryptoProvider to be re-initialized. This number is discarded for static/non-streamed payloads.
-    #phdr.chunk_count               = ((char)(prng.next() & 0xFF) % ((12+1) - 4)) + 4;
+    #phdr.roll_interval             = ((char)(prng.next() & 0xFF) % ((12+1) - 4)) + 4;
 
     return #phdr;
 }
@@ -382,33 +384,7 @@ fn void Payload.generate_random_data(&self, char[] destination, usz length) @loc
 }
 
 
-<*
- * Rotate the nonce/initialization-vector to its next value. This usually occurs
- *   as part of a change to the next 'chunk' of a payload. This doesn't use any
- *   tricks beyond a chain of XORs and an occasional message digest to prevent
- *   periodic data from appearing in many-chunk payloads.
- *>
-fn void? Payload.next_nonce(&self) @local
-{
-    defer self.nonce_rotation_counter++;
-
-    // If the rotation counter is a multiple of two passes-worth over the set of IV/nonce seeds,
-    //   then use the designated digest function to change the nonce value around entirely.
-    ulong constrained_counter = (self.nonce_rotation_counter + 1) % (2 + (2 * SEEDS_COUNT));
-
-    if (0 == constrained_counter) {
-        self.current_nonce =
-            self.digest_service.iface_digest((self.current_nonce))[:self.current_nonce.len];
-
-        return;
-    }
-
-    // Otherwise, just mix the current nonce with an XOR step, using nonce_seed values and the public 'stepper'.
-    //
-}
-
-
-alias FnStreamReadNextBlock = fn char[] ();
+alias FnStreamReadNextBlock = fn char[] (usz);
 alias FnStreamYieldBlock = FnYield;
 
 const MIN_STREAM_BLOCK_SIZE_FACTOR = 1;
@@ -430,13 +406,15 @@ struct MftahStreamRequest
  *>
 fn void? stream_new(MftahStreamRequest request)
 {
-    ulong stream_block_size = ((ulong)request.block_size_factor << 4) * (1024 * 1024);
+    ulong stream_block_size = (((ulong)request.block_size_factor << 4) + 1) * (1024 * 1024);
     ulong bytes_counter = 0;
     ulong block_counter = 0;
     ulong original_payload_length = 0;
+    char seed_step_counter = 0;
 
     Payload p;
     p.init(request.hooks, request.crypto_type)!;
+    defer p.destroy();
 
     // Set up the constructed payload header. A streamed MFTAH payload consists of a 'start' header and a 'tail' header.
     //   The former has most of the base payload information present, but fills out o_hmac, w_hmac, etc. with 0xFF bytes.
@@ -448,6 +426,13 @@ fn void? stream_new(MftahStreamRequest request)
     PayloadHeader* enc_hdr = request.hooks.malloc(PayloadHeader.sizeof);   // copies the 'true' header and gets encrypted
     hdr.crypto_type = request.crypto_type;
     hdr.stream_flags = { .enabled = true, .canary = false, .size_factor = request.block_size_factor };
+    char[NONCE_LEN] nonce; nonce[..] = hdr.nonce[..];
+    seed_step_counter = hdr.nonce_seed_step;
+
+    defer {
+        request.hooks.free(hdr);
+        request.hooks.free(enc_hdr);
+    }
 
     // Initialize pw hasher, HMAC, and crypto services.
     p.digest_service.iface_init();
@@ -455,7 +440,10 @@ fn void? stream_new(MftahStreamRequest request)
 
     p.o_hmac_service.iface_init(digested_key);
     p.w_hmac_service.iface_init(digested_key);
-    p.crypto_service.iface_init(digested_key, hdr.nonce[:p.crypto_service.iv_size()])!;
+    p.crypto_service.iface_init(digested_key, nonce[:p.crypto_service.iv_size()])!;
+
+    // This represents the length of the trailing payload header and the subsequent HMACs.
+    usz trailer_size = PayloadHeader.sizeof + (2 * p.o_hmac_service.iface_hashlen());
 
     // Encrypt the start header at the encryption boundary.
     //   Any important values should be updated/read from the true, never-emitted header: 'hdr'.
@@ -472,20 +460,35 @@ fn void? stream_new(MftahStreamRequest request)
 
     // Start the loop which reads from the input stream. Read until there's no data left.
     //   Streaming mode DOES NOT roll the nonce because it's a fully synchronous operation.
+    bool exit_loop = false;
     do OUTER: {
-        char[] this_block = request.next_block_callback();
+        char[] this_block = request.next_block_callback(stream_block_size);
 
         // Should always prep to exit the loop when a full stream block wasn't received.
-        bool exit_loop = this_block.len < stream_block_size;
+        exit_loop = this_block.len < stream_block_size;
 
         if (this_block.len > 0) p.o_hmac_service.iface_update(this_block);   // consume O-HMAC contents
 
         // Roll the CryptoProvider and IV when the blocks counter hits the roll_interval.
         if (0 == (block_counter % hdr.roll_interval)) {
-            hdr.nonce[:p.crypto_service.iv_size()] = p.digest_service.iface_digest(
-                hdr.nonce[:p.crypto_service.iv_size()])[:p.crypto_service.iv_size()];
+            nonce[:p.crypto_service.iv_size()] =
+                p.digest_service.iface_digest(
+                    nonce[:p.crypto_service.iv_size()]
+                )[:p.crypto_service.iv_size()];
 
-            p.crypto_service.iface_init(digested_key, hdr.nonce[:p.crypto_service.iv_size()])!;
+            p.crypto_service.iface_init(digested_key, nonce[:p.crypto_service.iv_size()])!;
+        } else {
+            // XOR the nonce/IV with a 'seed' value based on the block counter.
+            char which = hdr.nonce_seeds[block_counter % SEEDS_COUNT];
+
+            for (usz i = 0; i < p.crypto_service.iv_size(); ++i) nonce[i] ^= which;
+
+            if (!seed_step_counter) {
+                for (usz i = 0; i < p.crypto_service.iv_size(); ++i) nonce[i] ^= hdr.nonce_seed_step;
+                seed_step_counter = hdr.nonce_seed_step;
+            }
+
+            --seed_step_counter;
         }
 
         // This intentionally pads data of ANY size up to a block length, because that's how PKCS#7 works!
@@ -494,6 +497,12 @@ fn void? stream_new(MftahStreamRequest request)
         if (exit_loop) {
             this_block = p.crypto_service.pad(this_block)!;   // NOTE: this reallocates the pointer!
             // ^ that's why this must be the last call to the method...
+
+            // When the final block length would cause the trailing content to fall on a stream block boundary,
+            //   return an error that requires the user to choose a different stream block size. This should
+            //   be a rare occurrence, but it saves plenty of costs and checks when performing streamed
+            //   decryption because the location of the trailing header is guaranteed to be within a block.
+            if (this_block.len >= stream_block_size - trailer_size) return MISALIGNED_STREAM_BLOCK_SIZE?;
         }
 
         p.crypto_service.encrypt_mut(this_block)!;   // encrypt
@@ -502,10 +511,7 @@ fn void? stream_new(MftahStreamRequest request)
         request.yield_callback(this_block);   // emit
         bytes_counter += this_block.len;   // measure
         ++block_counter;
-
-        // Always check this condition on each block. A partial block should indicate the end of the stream.
-        if (exit_loop) break OUTER;
-    } while (true);
+    } while (!exit_loop);
 
     original_payload_length = (bytes_counter - PayloadHeader.sizeof);
 
@@ -530,14 +536,136 @@ fn void? stream_new(MftahStreamRequest request)
     request.yield_callback(o_hmac);
     p.w_hmac_service.iface_update(o_hmac);
     request.yield_callback(p.w_hmac_service.iface_final());
-
-    // All done. Clean up.
-    request.hooks.free(hdr);
-    request.hooks.free(enc_hdr);
-    p.destroy();
 }
 
 
-fn void? stream_decrypt(MftahStreamRequest request)
+import std::io;
+fn void? stream_decrypt(HooksTable hooks, char[] key,
+    FnStreamReadNextBlock next_block_callback, FnStreamYieldBlock yield_callback)
 {
+    // Read in the initial header and make sure this is a valid STREAMED MFTAH PAYLOAD.
+    char[] initial_header = next_block_callback(PayloadHeader.sizeof);
+    PayloadHeader* in_hdr = (PayloadHeader*)initial_header.ptr;
+
+    // Validate header fields.
+    if (initial_header.len < PayloadHeader.sizeof) return MISSING_PAYLOAD_HEADER?;
+
+    if (HEADER_MAGIC != initial_header[:HEADER_MAGIC.len]) return INVALID_PAYLOAD_MAGIC?;
+    if (in_hdr.crypto_type < CryptoType.values[0] || in_hdr.crypto_type > CryptoType.values[^1]) return INVALID_CRYPTO_TYPE?;
+
+    if (!in_hdr.stream_flags.enabled || in_hdr.stream_flags.canary) return PAYLOAD_NOT_STREAMED?;
+    if (in_hdr.stream_flags.size_factor < MIN_STREAM_BLOCK_SIZE_FACTOR
+        || in_hdr.stream_flags.size_factor > MAX_STREAM_BLOCK_SIZE_FACTOR) return INVALID_STREAM_BLOCK_SIZE?;
+
+    // Initialize the 'payload' object.
+    Payload p;
+    p.init(hooks, in_hdr.crypto_type)!;
+    defer p.destroy();
+
+    char[NONCE_LEN] nonce; nonce[..] = in_hdr.nonce[..];
+    char seed_step_counter = in_hdr.nonce_seed_step;
+
+    // Initialize pw hasher, HMAC, and crypto services.
+    p.digest_service.iface_init();
+    char[] digested_key = p.digest_service.iface_digest(key)[:p.digest_service.iface_hashlen()];
+
+    p.o_hmac_service.iface_init(digested_key);
+    p.w_hmac_service.iface_init(digested_key);
+    p.crypto_service.iface_init(digested_key, nonce[:p.crypto_service.iv_size()])!;
+
+    ulong stream_block_size = (((ulong)in_hdr.stream_flags.size_factor << 4) + 1) * (1024 * 1024);
+    ulong bytes_counter = 0;
+    ulong block_counter = 0;
+    ulong original_payload_length = 0;
+    usz block_size = p.crypto_service.block_size();
+    usz iv_size = p.crypto_service.iv_size();
+
+    // W-HMAC consumes the encrypted payload header.
+    p.w_hmac_service.iface_update(util::@aob(in_hdr));
+
+    // Decrypt the header's encrypted segment and validate that the signature is properly returned.
+    //   This is basically a quick initial password check that can save a lot of wasted time.
+    (void)p.crypto_service.decrypt_mut(initial_header[HEADER_ENCRYPT_OFFSET : HEADER_ENCRYPT_LENGTH])!;
+
+    if (HEADER_SIGNATURE != initial_header[$offsetof(in_hdr.signature) : HEADER_SIGNATURE.len]) return INCORRECT_KEY?;
+
+    // We need to always preserve a max of the PayloadHeader size's bytes from the trailing end of the last block.
+    //   Consider the case where the trailing header falls on the final 10 bytes of a full block and 198 bytes in 
+    //   the last block. It's thus split between them, and we need to be able to recover the full header when the
+    //   final block is < PayloadHeader.sizeof. The 2x HMACs are added as well, since they follow the final header...
+    usz trailer_size = PayloadHeader.sizeof + (2 * p.o_hmac_service.iface_hashlen());
+    PayloadHeader* tail_hdr = hooks.malloc(trailer_size);
+    if (null == tail_hdr) return OUT_OF_RESOURCES?;
+    defer free(tail_hdr);
+
+    // Enter the loop...
+    bool exit_loop = false;
+    do OUTER: {
+        char[] this_block = next_block_callback(stream_block_size);
+
+        if (!this_block.len) {
+            if (!block_counter) return PREMATURE_END_OF_STREAM?;
+
+            break OUTER;   // exit the loop immediately on a zero-length block...
+        }
+
+        // Should always prep to exit the loop when a full stream block wasn't received.
+        exit_loop = this_block.len < stream_block_size;
+
+        if (exit_loop && this_block.len < trailer_size) return PREMATURE_END_OF_STREAM?;
+
+        // consume W-HMAC contents
+        p.w_hmac_service.iface_update(
+            !exit_loop ? this_block : this_block[..^(p.w_hmac_service.iface_hashlen() + 1)]
+        );
+
+        // Memcpy the trailing information from the block into the shadow buffer.
+        if (exit_loop) ((char*)tail_hdr)[:trailer_size] = this_block[^trailer_size..];
+
+        // Roll the CryptoProvider and IV when the blocks counter hits the roll_interval.
+        if (0 == (block_counter % in_hdr.roll_interval)) {
+            nonce[:iv_size] = p.digest_service.iface_digest(nonce[:iv_size])[:iv_size];
+
+            p.crypto_service.iface_init(digested_key, nonce[:iv_size])!;
+        } else {
+            // XOR the nonce/IV with a 'seed' value based on the block counter.
+            char which = in_hdr.nonce_seeds[block_counter % SEEDS_COUNT];
+
+            for (usz i = 0; i < iv_size; ++i) nonce[i] ^= which;
+
+            if (!seed_step_counter) {
+                for (usz i = 0; i < iv_size; ++i) nonce[i] ^= in_hdr.nonce_seed_step;
+                seed_step_counter = in_hdr.nonce_seed_step;
+            }
+
+            --seed_step_counter;
+        }
+
+        // Reassign the block to the content WITHOUT the trailing header, if this is the final block.
+        this_block = !exit_loop ? this_block : this_block[:(this_block.len - trailer_size)];
+
+        p.crypto_service.decrypt_mut(this_block)!;   // decrypt
+
+        if (exit_loop) this_block = p.crypto_service.unpad(this_block)!;   // NOTE: this reallocates the pointer!
+
+        p.o_hmac_service.iface_update(this_block);   // consume O-HMAC contents
+
+        yield_callback(this_block);   // emit
+        bytes_counter += this_block.len;   // measure
+
+        ++block_counter;
+    } while (!exit_loop);
+
+    // At this point, the trailing header is awaiting parsing and both HMACs need to be checked.
+    if (HEADER_MAGIC != tail_hdr.magic[:HEADER_MAGIC.len]) return STREAM_MISSING_POST_HEADER?;
+
+    char[] final_original_hmac = p.o_hmac_service.iface_final();
+    char[] retrieved_o_hmac = ((char*)tail_hdr)[PayloadHeader.sizeof : p.o_hmac_service.iface_hashlen()];
+
+    char[] final_wrapper_hmac = p.w_hmac_service.iface_final();
+    char[] retrieved_w_hmac = ((char*)tail_hdr)[(PayloadHeader.sizeof + p.w_hmac_service.iface_hashlen()) : p.w_hmac_service.iface_hashlen()];
+
+    // Ensure we got the right HMAC values. These must obviously be exact reconstructions.
+    if (final_original_hmac != retrieved_o_hmac) return BAD_ORIGINAL_HMAC?;
+    if (final_wrapper_hmac != retrieved_w_hmac) return BAD_WRAPPER_HMAC?;
 }
