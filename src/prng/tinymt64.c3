@@ -340,6 +340,11 @@ fn void TinyMT64.period_certification(&self) @local
  *>
 fn void TinyMT64.init(&self, ulong seed)
 {
+    // TODO: This should be generated with the tinym64dc application/functions dynamically!
+    self.mat1 = 0x65980cb3;
+    self.mat2 = 0xeb38facf;
+    self.tmat = 0xcc3b75ff;
+
     self.status[0] = seed ^ ((ulong)self.mat1 << 32);
     self.status[1] = self.mat2 ^ self.tmat;
 
@@ -371,6 +376,11 @@ fn void TinyMT64.init_by_array(&self, ulong[] init_key)
     ulong r;
 
     ulong[4] st;
+
+    // TODO: This should be generated with the tinym64dc application/functions dynamically!
+    self.mat1 = 0x65980cb3;
+    self.mat2 = 0xeb38facf;
+    self.tmat = 0xcc3b75ff;
 
     st[0] = 0;
     st[1] = self.mat1;
