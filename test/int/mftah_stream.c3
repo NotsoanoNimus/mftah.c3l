@@ -95,5 +95,5 @@ fn void main()
     // return;
 
 
-    mftah::stream_new(key, MftahCryptoType.AES_256_CBC_HMAC_SHA256, 1, &next_block, &yield)!!;
+    mftah::stream_new(key, MftahCryptoType.CHACHA20_POLY1305, 1, &next_block, &yield)!!;
 }

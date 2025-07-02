@@ -11,7 +11,7 @@ import mftah::hashing::hmac;
 const BLOCK_SIZE = 128;
 const HASH_SIZE = 64;
 
-struct Sha512
+struct Sha512 (DigestProvider)
 {
     ulong               length;
     ulong[8]            hash_state;
@@ -22,10 +22,27 @@ alias HmacSha512    = Hmac{Sha512, HASH_SIZE, BLOCK_SIZE};
 alias hmac          = hmac::hash{Sha512, HASH_SIZE, BLOCK_SIZE};
 // alias pbkdf2        = hmac::pbkdf2{Sha512, HASH_SIZE, BLOCK_SIZE};
 
-fn char[] Sha512.iface_digest(Sha512 *self, char[] data)   @dynamic => hash(data)[..];
-fn void Sha512.iface_init(Sha512 *self)                    @dynamic => self.init();
-fn void Sha512.iface_update(Sha512 *self, char[] data)     @dynamic => self.update(data);
-fn char[] Sha512.iface_final(Sha512 *self)                 @dynamic => self.final()[..];
+
+fn usz Sha512.iface_hashlen(&self) @dynamic => HASH_SIZE;
+fn void Sha512.iface_init(&self) @dynamic => self.init();
+fn void Sha512.iface_update(&self, char[] data) @dynamic => self.update(data);
+fn char* Sha512.iface_final(&self) @dynamic
+{
+    char[HASH_SIZE] c = self.final();
+    char[] mem = malloc(HASH_SIZE)[:HASH_SIZE];
+    // for (usz i = 0; i < HASH_SIZE; ++i) mem[i] = c[i];
+    mem[..] = c[..];
+    return mem;
+}
+fn char* Sha512.iface_digest(&self, char[] data) @dynamic
+{
+    char[HASH_SIZE] c = hash(data);
+    char[] mem = malloc(HASH_SIZE)[:HASH_SIZE];
+    // for (usz i = 0; i < HASH_SIZE; ++i) mem[i] = c[i];
+    mem[..] = c[..];
+    return mem;
+}
+
 
 macro ulong ror(ulong n, int k) @local => ((n >> k) | (n << (64 - k)));
 

@@ -48,7 +48,7 @@ const MftahVersion CURRENT_VERSION = DYNAMIC_CRYPTO;
 enum MftahCryptoType : ushort (inline ushort raw)
 {
     AES_256_CBC_HMAC_SHA256 = 1,
-    AEAD_CHACHA20_POLY1305  = 2,
+    CHACHA20_POLY1305  = 2,
 }
 
 
@@ -151,7 +151,6 @@ interface CryptoProvider
 
     fn char[]? encrypt_mut(char[]);
     fn char[]? decrypt_mut(char[]);
-    fn void? update_iv(char[]);
 
     fn char[]? pad(char[]);
     fn char[]? unpad(char[]);
@@ -239,10 +238,16 @@ macro void? @set_payload_services(
 {
     switch (crypto_type) {
         case AES_256_CBC_HMAC_SHA256:
-            Sha256* h = malloc(Sha256.sizeof);             #hash = h;
-            HmacSha256* ho = malloc(HmacSha256.sizeof);    #o_hmac = ho;
-            HmacSha256* hw = malloc(HmacSha256.sizeof);    #w_hmac = hw;
-            AesCtx* c = malloc(AesCtx.sizeof);             #crypto = c;
+            Sha256* h = malloc(Sha256.sizeof);          #hash = h;
+            HmacSha256* ho = malloc(HmacSha256.sizeof); #o_hmac = ho;
+            HmacSha256* hw = malloc(HmacSha256.sizeof); #w_hmac = hw;
+            AesCtx* c = malloc(AesCtx.sizeof);          #crypto = c;
+
+        case CHACHA20_POLY1305:
+            Sha512* h = malloc(Sha512.sizeof);          #hash = h;
+            Poly1305* ho = malloc(Poly1305.sizeof);     #o_hmac = ho;
+            Poly1305* hw = malloc(Poly1305.sizeof);     #w_hmac = hw;
+            ChaCha20* c = malloc(ChaCha20.sizeof);      #crypto = c;
 
         default: return mftah::INVALID_CRYPTO_TYPE?;
     }

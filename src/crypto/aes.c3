@@ -102,8 +102,6 @@ fn char[]? AesCtx.decrypt_mut(&self, char[] input) @dynamic
 	return input;
 }
 
-fn void? AesCtx.update_iv(&self, char[] new_iv) @dynamic => (void)self.set_iv(new_iv)!;
-
 fn char[]? AesCtx.pad(&self, char[] input) @dynamic => util::@pkcs7(BLOCKLEN, input);
 fn char[]? AesCtx.unpad(&self, char[] input) @dynamic => util::@unpkcs7(BLOCKLEN, input);
 
