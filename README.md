@@ -1,13 +1,18 @@
 # Media For Tamper-Averse Humans (MFTAH)
 C3 library for creating and manipulating [MFTAH](https://github.com/NotsoanoNimus/MFTAH)-encrypted data payloads, both static and streamed types.
 
+![image](https://github.com/user-attachments/assets/016a21a3-b8f7-4517-9501-2f84e84b3c0b)
+
 
 ## Usage
 For any C3 project which aims to incorporate this format, simply clone the repo to the project's `lib/` folder, `import mftah;`, and you're off.
 
 Some key uses:
-  - `mftah::new` and `mftah::decrypt`: Encrypt and Decrypt static MFTAH payloads. This copies the full breadth of an input into RAM before operating on it, so be careful with large payloads!
-  - `mftah::stream_new` and `mftah::stream_decrypt`: Encrypt and Decrypt streamed MFTAH payloads. This chunks the input data into blocks and streams the result of each block operation one at a time, which is much more memory-efficient.
+  - `mftah::new` and `mftah::decrypt`: Encrypt and Decrypt fixed-length MFTAH payloads from a heap-allocated pointer.
+    - This requires copying the full breadth of the input data into RAM before operating on it, so be careful with large inputs!
+  - `mftah::stream_new` and `mftah::stream_decrypt`: Encrypt and Decrypt streamed MFTAH payloads.
+    - This chunks the input data into blocks and streams (or "yields") the result of each block operation one at a time, which is much more memory-efficient.
+    - Streaming is very useful for a very large input data pool, for memory-constrained systems, or for operating with other block-based applications (such as `dd`).
 
 
 ## Why
@@ -25,13 +30,14 @@ SECURED IN-MEMORY DATA ==> TAR ==> GZIP ==> MFTAH ==> DISK
 
 This pipeline incorporates MFTAH just before writing the compressed data to the disk, ensuring that only protected data is ever stored.
 
-
-## File Format
-**TODO**: Insert a specification reference for the MFTAH file format (both streamed payloads and ordinary payloads).
+As expected, it's just as easy to get your data back out of its encrypted format by reversing this pipeline:
+```text
+DISK ==> MFTAH ==> GZIP ==> TAR ==> ORIGINAL DATA
+```
 
 
 ## Project-specific Details
-Aside from being written in [the up-and-coming C3 language](https://c3-lang.org/), this library has some quirks that are worth mentioning explicitly.
+Aside from being written in [the remarkably fun C3 language](https://c3-lang.org/), this library has some quirks that are worth mentioning explicitly.
 
 ### Design Goals & Decisions
 `mftah.c3l` is designed to be included in any generic application. Most importantly, this includes ***runtime environments outside of LIBC*** - such as custom operating system applications, UEFI applications, etc.
@@ -41,4 +47,4 @@ To the absolute extent that is possible, this is a _self-contained_ library, mea
 
 While this has caveats - such as not receiving security or functionality updates regularly and automatically - it allows the library to flexibly customize and tailor different algorithms and constructs to its needs.
 
-Such a need _mostly_ consists of just ripping out any `stdlib` or `libc` references where possible, in favor of the `HooksTable` construct which provides analogous functionality.
+Such a need _mostly_ consists of ripping out any `stdlib` or `libc` references where possible, so users of the library can provide their own `malloc` symbol, `realloc`, `memcpy`, etc.
