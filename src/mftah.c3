@@ -45,7 +45,7 @@ const MftahVersion DYNAMIC_CRYPTO   = { 2, 2, 0x222 };
 const MftahVersion CURRENT_VERSION = DYNAMIC_CRYPTO;
 
 
-enum MftahCryptoType : (ushort raw)
+enum MftahCryptoType : const ushort
 {
     AES_256_CBC_HMAC_SHA256     = 1,
     CHACHA20_POLY1305           = 2,
@@ -309,7 +309,37 @@ fn void MftahContext.generate_random_data(&self, char[] destination, usz length)
 
 
 <*
+Encrypt a static, in-memory MFTAH payload from a char slice.
+
+@param payload : "The input data to encrypt in-place."
+@param key : "The symmetric key to use when encrypting the payload."
+@param crypto_type : "The predefined MFTAH crypto algorithm suite used to encrypt (and thus decrypt) the payload."
+@param thread_count : "The amount of simultaneous threads - or parallel crypto operations - to use when encrypting the payload."
+
+@require payload.len > 0 : "The payload cannot be empty."
+@require key.len > 0 : "The key cannot be empty."
+@require thread_count > 0 : "The thread count must be at least 1."
 *>
+fn void? new(char[] payload, char[] key,
+    MftahCryptoType crypto_type = CHACHA20_POLY1305, char thread_count = 1)
+{
+    //
+}
+
+
+<*
+Decrypt a static, in-memory MFTAH payload from a char slice.
+
+@param [inout] payload : "The input MFTAH payload to be decrypted and stripped of header information."
+@param [in] key : "The key used to decrypt the MFTAH payload."
+
+@require payload.len > 0 : "The payload cannot be empty."
+@require key.len > 0 : "The key cannot be empty."
+*>
+fn void? decrypt(char[] payload, char[] key)
+{
+    //
+}
 
 
 alias FnStreamReadNextBlock = fn char[] (usz);
