@@ -66,12 +66,18 @@ faultdef
     INVALID_PAYLOAD_MAGIC,
     INVALID_CRYPTO_TYPE,
     PAYLOAD_NOT_STREAMED,
+    PAYLOAD_NOT_FIXED,
     INCORRECT_KEY,
     PREMATURE_END_OF_STREAM,
     STREAM_MISSING_POST_HEADER,
     BAD_WRAPPER_HMAC,
+    BAD_WRAPPER_HMAC_POSITION,
     BAD_ORIGINAL_HMAC,
-    BAD_SEED_STEP_VALUE
+    BAD_ORIGINAL_HMAC_POSITION,
+    BAD_ORIGINAL_PAYLOAD_POSITION,
+    BAD_ORIGINAL_PAYLOAD_LENGTH,
+    BAD_SEED_STEP_VALUE,
+    INVALID_CHUNK_COUNT
     ;
 
 
@@ -377,7 +383,7 @@ Encrypt a static, in-memory MFTAH payload from a char slice.
 @require thread_count > 0 && thread_count <= 64 : "The thread count must be at least 1, but not more than 64."
 @require payload_start_offset < (16*1024*1024) : "Payload start offset cannot be more than 16 MiB from the end of the header."
 
-@return "A slice pointing to the new, encrypted MFTAH payload details."
+@return "A slice pointing to the new, encrypted MFTAH payload."
 *>
 fn char[]? new(char[] payload, char[] key, MftahCryptoType crypto_type = CHACHA20_POLY1305,
     char thread_count = 1, ulong payload_start_offset = 0)
@@ -549,10 +555,142 @@ Decrypt a static, in-memory MFTAH payload from a char slice.
 
 @require payload.len > 0 : "The payload cannot be empty."
 @require key.len > 0 : "The key cannot be empty."
+
+@return "A slice pointing to the decrypted MFTAH payload."
 *>
-fn void? decrypt(char[] payload, char[] key)
+fn char[]? decrypt(char[] payload, char[] key)
 {
-    //
+    if (payload.len < PayloadHeader.sizeof) return MISSING_PAYLOAD_HEADER?;
+
+    PayloadHeader* in_hdr = (PayloadHeader*)payload.ptr;
+
+    if (HEADER_MAGIC != util::@aob(in_hdr, HEADER_MAGIC.len)) return INVALID_PAYLOAD_MAGIC?;
+    if (in_hdr.crypto_type < MftahCryptoType.values[0] || in_hdr.crypto_type > MftahCryptoType.values[^1]) return INVALID_CRYPTO_TYPE?;
+
+    if (in_hdr.stream_flags.enabled || !in_hdr.stream_flags.canary) return PAYLOAD_NOT_FIXED?;
+
+    if (0 == in_hdr.nonce_seed_step) return BAD_SEED_STEP_VALUE?;
+
+    // Initialize the 'payload' object.
+    MftahContext ctx;
+    ctx.init(in_hdr.crypto_type)!;
+    defer ctx.destroy();
+
+    // Store sizes from provider interfaces (these calls can get expensive).
+    usz digest_size = ctx.digest_service.iface_hashlen();
+    usz block_size = ctx.crypto_service.block_size();
+    usz iv_size = ctx.crypto_service.iv_size();
+    usz o_hmac_size = ctx.o_hmac_service.iface_hashlen();
+    usz w_hmac_size = ctx.w_hmac_service.iface_hashlen();
+
+    char[NONCE_LEN] nonce; nonce[..] = in_hdr.nonce[..];
+    char seed_step_counter = in_hdr.nonce_seed_step;
+
+    // Initialize pw hasher, HMAC, and crypto services.
+    ctx.digest_service.iface_init();
+    char[] digested_key = ctx.digest_service.iface_digest(key)[:ctx.digest_service.iface_hashlen()];
+    defer free(digested_key.ptr);
+
+    ctx.o_hmac_service.iface_init(digested_key);
+    ctx.w_hmac_service.iface_init(digested_key);
+    ctx.crypto_service.iface_init(digested_key, nonce[:ctx.crypto_service.iv_size()])!;
+
+    // Adjust for extra leading space required by the payload.
+    //   THESE ARE A COPY OF THE EXACT CALCULATIONS FROM THE 'new' FUNCTION.
+    ulong required_hmac_space = o_hmac_size;
+    ulong block_padding = ($offsetof(in_hdr.extra_space) + required_hmac_space) % block_size
+        ? (block_size - (($offsetof(in_hdr.extra_space) + required_hmac_space) % block_size))
+        : 0;
+    long extra_length_needed = (required_hmac_space + block_padding) - in_hdr.extra_space.len;
+    if (extra_length_needed < 0) extra_length_needed = 0;
+io::printf("=== SPACE : required_hmac_space(%d) / block_padding(%d) / extra_length_needed(%d) / ", required_hmac_space, block_padding, extra_length_needed);
+
+    // The 'leader' is the header + extra + W-HMAC space, BEFORE the extra padding requested by the user.
+    ulong leader_length = PayloadHeader.sizeof + extra_length_needed + w_hmac_size;
+io::printf("leader_length(%d)\n", leader_length);
+
+    // Consume the W-HMAC contents before decrypting. This step also immediately permits its validation.
+    ctx.w_hmac_service.iface_update(payload[:(leader_length - w_hmac_size)]);
+    ctx.w_hmac_service.iface_update(payload[leader_length..]);
+
+    char[] w_hmac = ctx.w_hmac_service.iface_final();
+    defer free(w_hmac.ptr);
+    if (w_hmac != payload[(leader_length - w_hmac_size) : w_hmac_size]) return BAD_WRAPPER_HMAC?;
+io::printf("=== W-HMAC ok :\n"); util::@slicedump(w_hmac);
+
+    // Decrypt the header and check the signature.
+    ctx.crypto_service.decrypt_mut(payload[HEADER_ENCRYPT_OFFSET : HEADER_ENCRYPT_LENGTH + extra_length_needed])!;
+
+    if (HEADER_SIGNATURE != payload[$offsetof(in_hdr.signature) : 16]) return INCORRECT_KEY?;
+    if (!in_hdr.chunk_count || in_hdr.chunk_count > 64) return INVALID_CHUNK_COUNT?;
+    if (in_hdr.wrapper_digest_offset != (leader_length - w_hmac_size)) return BAD_WRAPPER_HMAC_POSITION?;
+    if (in_hdr.original_digest_offset != $offsetof(in_hdr.extra_space)) return BAD_ORIGINAL_HMAC_POSITION?;
+    if (in_hdr.payload_start < leader_length) return BAD_ORIGINAL_PAYLOAD_POSITION?;
+    if (!in_hdr.payload_length) return BAD_ORIGINAL_PAYLOAD_LENGTH?;
+
+    ulong payload_start = in_hdr.payload_start;
+    ulong payload_length = in_hdr.payload_length;
+    char thread_count = in_hdr.chunk_count;
+
+    // ===============================================================================================
+    // Use the same threading setup as encryption to decrypt the original payload in chunks.
+    Pthread_t[] thread_pool = ((Pthread_t*)calloc(Pthread_t.sizeof * thread_count))[:thread_count];
+    if (null == thread_pool.ptr) return OUT_OF_RESOURCES?;
+    defer free(thread_pool);
+
+    WorkOrder*[] work_orders = ((WorkOrder**)calloc(WorkOrder*.sizeof * thread_count))[:thread_count];
+    if (null == work_orders.ptr) return OUT_OF_RESOURCES?;
+    defer free(work_orders);
+
+    ulong schedule_remaining_length = payload_length;
+    ulong schedule_span = (payload_length / thread_count);
+
+    // When the size of each scheduled thread's content is 0, too many threads were requested so just use one.
+    if (!schedule_span) {
+        schedule_span = payload_length;
+        thread_count = 1;
+    }
+
+    for (uint thread = 0; thread < thread_count; ++thread) {
+        work_orders[thread] = malloc(WorkOrder.sizeof);
+        if (null == work_orders[thread]) return OUT_OF_RESOURCES?;
+
+        *(work_orders[thread]) = {
+            .input = payload[
+                (payload_start + (thread * schedule_span))
+                : ((thread + 1) == thread_count ? schedule_remaining_length : schedule_span)
+            ],
+            .digested_key = digested_key,
+            .is_encrypt = false,
+            .thread_index = thread,
+            .raw_header = in_hdr,
+        };
+
+        (void)threading::pthread_create(&thread_pool[thread], null, &thread_crypt, work_orders[thread]);
+
+        schedule_remaining_length -= schedule_span;
+    }
+
+    // Await all threads.
+    for (usz thread = 0; thread < thread_count; ++thread) {
+        (void)threading::pthread_join(thread_pool[thread], null);
+        free(work_orders[thread]);
+    }
+
+    // ===============================================================================================
+
+    // Unpad the payload to trim it to the correct length.
+    payload = payload[payload_start..];   // trim header from slice, but 'in_hdr' still maintains header info
+    payload = ctx.crypto_service.unpad(payload)!;
+
+    // Get the original HMAC and compare.
+    ctx.o_hmac_service.iface_update(payload);
+    char[] o_hmac = ctx.o_hmac_service.iface_final();
+    defer free(o_hmac.ptr);
+    if (o_hmac != util::@aob(in_hdr, leader_length)[in_hdr.original_digest_offset : o_hmac_size]) return BAD_ORIGINAL_HMAC?;
+
+    // All done! Return the slice that windows the decrypted, original payload data.
+    return payload;
 }
 
 
