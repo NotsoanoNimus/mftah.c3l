@@ -38,7 +38,10 @@ File out_file;
 
 fn char[] next_block(usz block_size)
 {
-    if (null == data.ptr) data = calloc(block_size)[:block_size];
+    if (block_size != data.len) {
+        if (null != data.ptr) free(data.ptr);
+        data = calloc(block_size)[:block_size];
+    }
 
     if (ctr >= data_const.len) return {};
 
@@ -59,41 +62,13 @@ fn void yield(char[] data)
 }
 
 
-const ZString IMMUTABLE_STRING = "!";
-
 fn void main()
 {
     char[] key = "applesauce";
-    // usz testlen = BLOCK_SIZE*16 + (1024*1024); data_const = calloc(testlen)[:testlen];
-
-    char[] test = sha256::hmac(sha256::hash(key)[..], data_const)[..];
-    util::@slicedump(test);
 
     out_file = file::open("/tmp/encrypted_stream.mftah", "w")!!;
     out_file.seek(0)!!;
     defer out_file.close()!!;
-
-    // char[] sequence = util::@pkcs7(
-    //     aes::BLOCKLEN,
-    //     libc::strdup(IMMUTABLE_STRING)[:libc::strlen(IMMUTABLE_STRING)]
-    // )!!;
-    // char[] key = x"603deb1015ca71be2b73aef0857d77811f352c073b6108d72d9810a30914dff4"[..];
-    // char[] iv = x"10101010101010101010101010101010"[..];
-
-    // AesCtx* c = calloc(AesCtx.sizeof);
-    // CryptoProvider p = c;
-
-    // p.iface_init(key, iv)!!;
-
-    // p.encrypt_mut(sequence)!!;
-    // util::@slicedump(sequence);
-
-    // p.update_iv(iv)!!;
-    // p.decrypt_mut(sequence)!!;
-    // util::@slicedump(util::@unpkcs7(p.block_size(), sequence)!!);
-
-    // return;
-
 
     mftah::stream_new(key, MftahCryptoType.CHACHA20_POLY1305, 1, &next_block, &yield)!!;
 }
