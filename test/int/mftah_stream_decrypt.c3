@@ -59,7 +59,7 @@ fn char[] next_block(usz block_size)
 
 fn void yield(char[] data)
 {
-    util::@slicedump(libc::printf, data[:util::@min(256, data.len)], 32);
+    util::@slicedump(data[:util::@min(256, data.len)], 32);
     out_file.write(data)!!;
 }
 

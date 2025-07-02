@@ -29,22 +29,24 @@
  */
 module mftah::util;
 
+import std::io;
+
 
 macro @min(#x, #y) => #x < #y ? #x : #y;
 macro @max(#x, #y) => #x > #y ? #x : #y;
 
 macro char[] @aob(ptr) => ((char*)ptr)[:$sizeof(*ptr)];
 
-macro @memdump(#printf, #ptr, #len, $width = 16)
+macro @memdump(#ptr, #len, $width = 16)
 {
     for (usz i = 0; i < #len; ++i) {
-        (#printf)("%02x%c", ((char*)#ptr)[i], (i+1) % $width ? ' ' : '\n');
+        io::printf("%02x%c", ((char*)#ptr)[i], (i+1) % $width ? ' ' : '\n');
     }
-    (#printf)("\n");
+    io::printf("\n");
 }
 
-macro @slicedump(#printf, slice, $width = 16)
-    => @memdump(#printf, slice.ptr, slice.len * $typeof(slice[0]).sizeof, $width);
+macro @slicedump(slice, $width = 16)
+    => @memdump(slice.ptr, slice.len * $typeof(slice[0]).sizeof, $width);
 
 macro @w($str) @const
 {

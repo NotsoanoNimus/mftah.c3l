@@ -54,7 +54,7 @@ fn char[] next_block(usz block_size)
 
 fn void yield(char[] data)
 {
-    util::@slicedump(libc::printf, data[:util::@min(256, data.len)], 32);
+    util::@slicedump(data[:util::@min(256, data.len)], 32);
     out_file.write(data)!!;
 }
 
@@ -67,7 +67,7 @@ fn void main()
     // usz testlen = BLOCK_SIZE*16 + (1024*1024); data_const = calloc(testlen)[:testlen];
 
     char[] test = sha256::hmac(sha256::hash(key)[..], data_const)[..];
-    util::@slicedump(io::printf, test);
+    util::@slicedump(test);
 
     out_file = file::open("/tmp/encrypted_stream.mftah", "w")!!;
     out_file.seek(0)!!;
@@ -86,11 +86,11 @@ fn void main()
     // p.iface_init(key, iv)!!;
 
     // p.encrypt_mut(sequence)!!;
-    // util::@slicedump(io::printf, sequence);
+    // util::@slicedump(sequence);
 
     // p.update_iv(iv)!!;
     // p.decrypt_mut(sequence)!!;
-    // util::@slicedump(io::printf, util::@unpkcs7(p.block_size(), sequence)!!);
+    // util::@slicedump(util::@unpkcs7(p.block_size(), sequence)!!);
 
     // return;
 

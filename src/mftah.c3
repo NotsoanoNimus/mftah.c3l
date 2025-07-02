@@ -69,7 +69,8 @@ faultdef
     PREMATURE_END_OF_STREAM,
     STREAM_MISSING_POST_HEADER,
     BAD_WRAPPER_HMAC,
-    BAD_ORIGINAL_HMAC
+    BAD_ORIGINAL_HMAC,
+    BAD_SEED_STEP_VALUE
     ;
 
 
@@ -170,7 +171,7 @@ struct WorkOrder @local
 }
 
 
-struct MftahContext
+struct MftahContext @local
 {
     bool                is_initialized;   // track whether 'init' has been called for the instance yet
 
@@ -207,7 +208,11 @@ macro PayloadHeader* @init_header(#phdr) @local
     for (i = 0; i < NONCE_LEN; ++i) #phdr.nonce[i] = (char)(prng.next() & 0xFF);
 
     for (i = 0; i < SEEDS_COUNT; ++i) #phdr.nonce_seeds[i] = (char)(prng.next() & 0xFF);
+
+
+    // Prevent divide-by-zero crashes.
     #phdr.nonce_seed_step = (char)(prng.next() & 0xFF);
+    if (0 == #phdr.nonce_seed_step) #phdr.nonce_seed_step = (char)(prng.next() & 0xFF) | 0x01;
 
     for (i = 0; i < 80; ++i) #phdr.extra_space[i] = (char)(prng.next() & 0xFF);
 
@@ -364,9 +369,6 @@ fn void? stream_new(char[] key, MftahCryptoType crypto_type, char block_size_fac
     usz block_size = ctx.crypto_service.block_size();
     usz iv_size = ctx.crypto_service.iv_size();
 
-    // Prevent divide-by-zero crashes.
-    if (!hdr.roll_interval) hdr.roll_interval = 0xFF;
-
     // This represents the length of the trailing payload header and the subsequent HMACs.
     usz trailer_size = PayloadHeader.sizeof + ctx.o_hmac_service.iface_hashlen() + ctx.w_hmac_service.iface_hashlen();
 
@@ -482,21 +484,24 @@ fn void? stream_decrypt(
 {
     // Read in the initial header and make sure this is a valid STREAMED MFTAH PAYLOAD.
     char[] initial_header = next_block_callback(PayloadHeader.sizeof);
-    PayloadHeader* in_hdr = malloc(PayloadHeader.sizeof);
-    defer free(in_hdr);
 
     // Validate header fields.
     if (initial_header.len < PayloadHeader.sizeof) return MISSING_PAYLOAD_HEADER?;
 
     // Copy.
+    PayloadHeader* in_hdr = malloc(PayloadHeader.sizeof);
+    if (null == in_hdr) return OUT_OF_RESOURCES?;
+    defer free(in_hdr);
     *in_hdr = *(PayloadHeader*)initial_header.ptr;
 
-    if (HEADER_MAGIC != initial_header[:HEADER_MAGIC.len]) return INVALID_PAYLOAD_MAGIC?;
+    if (HEADER_MAGIC != util::@aob(in_hdr)[:HEADER_MAGIC.len]) return INVALID_PAYLOAD_MAGIC?;
     if (in_hdr.crypto_type < MftahCryptoType.values[0] || in_hdr.crypto_type > MftahCryptoType.values[^1]) return INVALID_CRYPTO_TYPE?;
 
     if (!in_hdr.stream_flags.enabled || in_hdr.stream_flags.canary) return PAYLOAD_NOT_STREAMED?;
     if (in_hdr.stream_flags.size_factor < MIN_STREAM_BLOCK_SIZE_FACTOR
         || in_hdr.stream_flags.size_factor > MAX_STREAM_BLOCK_SIZE_FACTOR) return INVALID_STREAM_BLOCK_SIZE?;
+
+    if (0 == in_hdr.nonce_seed_step) return BAD_SEED_STEP_VALUE?;
 
     // Initialize the 'payload' object.
     MftahContext ctx;
@@ -523,17 +528,14 @@ fn void? stream_decrypt(
     usz block_size = ctx.crypto_service.block_size();
     usz iv_size = ctx.crypto_service.iv_size();
 
-    // Prevent divide-by-zero crashes.
-    if (!in_hdr.roll_interval) in_hdr.roll_interval = 0xFF;
-
     // W-HMAC consumes the encrypted payload header.
     ctx.w_hmac_service.iface_update(util::@aob(in_hdr));
 
     // Decrypt the header's encrypted segment and validate that the signature is properly returned.
     //   This is basically a quick initial password check that can save a lot of wasted time.
-    (void)ctx.crypto_service.decrypt_mut(initial_header[HEADER_ENCRYPT_OFFSET : HEADER_ENCRYPT_LENGTH])!;
+    (void)ctx.crypto_service.decrypt_mut(util::@aob(in_hdr)[HEADER_ENCRYPT_OFFSET : HEADER_ENCRYPT_LENGTH])!;
 
-    if (HEADER_SIGNATURE != initial_header[$offsetof(in_hdr.signature) : HEADER_SIGNATURE.len]) return INCORRECT_KEY?;
+    if (HEADER_SIGNATURE != util::@aob(in_hdr)[$offsetof(in_hdr.signature) : HEADER_SIGNATURE.len]) return INCORRECT_KEY?;
 
     // We need to always preserve a max of the PayloadHeader size's bytes from the trailing end of the last block.
     //   Consider the case where the trailing header falls on the final 10 bytes of a full block and 198 bytes in 
