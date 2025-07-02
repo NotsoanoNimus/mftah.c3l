@@ -64,13 +64,7 @@ enum PayloadState : char
     UNKNOWN,
 }
 
-enum WorkType : char
-{
-    ENCRYPT,
-    DECRYPT,
-}
-
-enum CryptoType : ushort (inline ushort raw)
+enum MftahCryptoType : ushort (inline ushort raw)
 {
     AES_256_CBC_HMAC_SHA256 = 1,
     AEAD_CHACHA20_POLY1305  = 2,
@@ -97,37 +91,12 @@ faultdef
     BAD_ORIGINAL_HMAC
     ;
 
-alias FnMftahPrintf = fn void (LogLevel, char[], ...);
-alias FnMalloc = fn void* (usz);
-alias FnCalloc = fn void* (usz, usz);
-alias FnRealloc = fn void* (void*, usz);
-alias FnMemcpy = fn void* (void*, void*, usz);
-alias FnMemset = fn void* (void*, int, usz);
-alias FnMemmove = fn void* (void*, void*, usz);
-alias FnMemcmp = fn int (void*, void*, usz);
-alias FnFree = fn void (void*);
-alias FnProgressReporter = fn void (ulong current, ulong out_of, void* extra = null);
-alias FnYield = fn void (char[] flushed_block);
-
-struct HooksTable
-{
-    FnMftahPrintf       printf;
-    FnMalloc            malloc;
-    FnCalloc            calloc;
-    FnRealloc           realloc;
-    FnMemcpy            memcpy;
-    FnMemset            memset;
-    FnMemmove           memmove;
-    FnMemcmp            memcmp;
-    FnFree              free;
-    FnProgressReporter  progress;
-}
 
 struct WorkOrder
 {
     char[]              input;
-    WorkType            work_type;
-    CryptoType          crypto_type;
+    bool                is_encrypt;
+    MftahCryptoType     crypto_type;
     uint                thread_index;
     bool                suppress_progress;
 }
@@ -143,7 +112,7 @@ const NONCE_LEN = 64;   // technically a "max" len
 const SEEDS_COUNT = 7;
 
 
-bitstruct StreamFlags : char
+bitstruct MftahStreamFlags : char
 {
     bool                enabled     : 0;
     bool                canary      : 1;
@@ -154,8 +123,8 @@ struct PayloadHeader @packed
 {
     char[8]             magic;                              // 0..7
     MftahVersion        version;                            // 8..11
-    CryptoType          crypto_type;                        // 12..13
-    StreamFlags         stream_flags;                       // 14
+    MftahCryptoType     crypto_type;                        // 12..13
+    MftahStreamFlags    stream_flags;                       // 14
     char                nonce_seed_step;                    // 15
     char[NONCE_LEN]     nonce;
     // Items below are always ENCRYPTED for MFTAH files.
@@ -224,8 +193,6 @@ struct Payload
 {
     bool                is_initialized;   // track whether 'init' has been called for the instance yet
 
-    HooksTable          hooks;   // function pointer table to use for common libc/os-specific (like 'malloc')
-
     Xoshiro256pp        prng;   // random number generator attached to the instance.
 
     PayloadHeader*      header_start;
@@ -253,7 +220,7 @@ macro PayloadHeader* @init_header(#phdr) @local
     for (i = 0; i < HEADER_SIGNATURE.len; ++i) #phdr.signature[i] = HEADER_SIGNATURE[i];
 
     *((ushort*)(&#phdr.crypto_type)) = (ushort)(prng.next() & 0xFFFF);
-    #phdr.stream_flags = (StreamFlags)(char)0xFF;
+    #phdr.stream_flags = (MftahStreamFlags)(char)0xFF;
 
     for (i = 0; i < NONCE_LEN; ++i) #phdr.nonce[i] = (char)(prng.next() & 0xFF);
 
@@ -280,15 +247,14 @@ macro PayloadHeader* @init_header(#phdr) @local
 <*
 Assign implementors to each given interface pointer expression, based on the selected crypto type/suite.
 *>
-macro void? @set_payload_services(
-    CryptoType crypto_type, #malloc, #hash, #o_hmac, #w_hmac, #crypto)
+macro void? @set_payload_services(MftahCryptoType crypto_type, #hash, #o_hmac, #w_hmac, #crypto)
 {
     switch (crypto_type) {
         case AES_256_CBC_HMAC_SHA256:
-            Sha256* h = #malloc(Sha256.sizeof);             #hash = h;
-            HmacSha256* ho = #malloc(HmacSha256.sizeof);    #o_hmac = ho;
-            HmacSha256* hw = #malloc(HmacSha256.sizeof);    #w_hmac = hw;
-            AesCtx* c = #malloc(AesCtx.sizeof);             #crypto = c;
+            Sha256* h = malloc(Sha256.sizeof);             #hash = h;
+            HmacSha256* ho = malloc(HmacSha256.sizeof);    #o_hmac = ho;
+            HmacSha256* hw = malloc(HmacSha256.sizeof);    #w_hmac = hw;
+            AesCtx* c = malloc(AesCtx.sizeof);             #crypto = c;
 
         default: return mftah::INVALID_CRYPTO_TYPE?;
     }
@@ -299,20 +265,18 @@ macro void? @set_payload_services(
 Initialize the Payload meta-object with details about a buffer of
   data, whether a full payload or the first block of a stream.
 
-@param hooks : "A set of function pointers for the MFTAH payload to utilize during operations."
+@param crypto_type : "The Crypto type used to work on the MFTAH Payload."
 *>
-fn void? Payload.init(&self, HooksTable hooks, CryptoType crypto_type)
+fn void? Payload.init(&self, MftahCryptoType crypto_type)
 {
     if (self.is_initialized) return PAYLOAD_ALREADY_INITIALIZED?;
 
     self.prng.init();
 
     @set_payload_services(
-        crypto_type, hooks.malloc, self.digest_service, self.o_hmac_service,
+        crypto_type, self.digest_service, self.o_hmac_service,
         self.w_hmac_service, self.crypto_service
     )!;
-
-    self.hooks = hooks;
 
     self.is_initialized = true;
 }
@@ -325,10 +289,10 @@ fn void? Payload.destroy(&self) @local @maydiscard
 {
     if (!self.is_initialized) return NOT_INITIALIZED?;
 
-    self.hooks.free(self.digest_service);
-    self.hooks.free(self.o_hmac_service);
-    self.hooks.free(self.w_hmac_service);
-    self.hooks.free(self.crypto_service);
+    free(self.digest_service);
+    free(self.o_hmac_service);
+    free(self.w_hmac_service);
+    free(self.crypto_service);
 
     self.is_initialized = false;
 }
@@ -356,60 +320,58 @@ fn void Payload.generate_random_data(&self, char[] destination, usz length) @loc
 
 
 alias FnStreamReadNextBlock = fn char[] (usz);
-alias FnStreamYieldBlock = FnYield;
+alias FnStreamYieldBlock = fn void (char[]);
 
 const MIN_STREAM_BLOCK_SIZE_FACTOR = 1;
 const MAX_STREAM_BLOCK_SIZE_FACTOR = 16;
 
-struct MftahStreamRequest
-{
-    HooksTable hooks;
-    char[] key;
-    CryptoType crypto_type;
-    char block_size_factor;
-    FnStreamReadNextBlock next_block_callback;
-    FnStreamYieldBlock yield_callback;
-}
 
 <*
 Create a new streamed MFTAH payload from a series of input data that's both read and written in chunks.
 
-@require request.block_size_factor >= MIN_STREAM_BLOCK_SIZE_FACTOR : "Block size factor cannot be smaller than 1 (16 MiB)."
-@require request.block_size_factor <= MAX_STREAM_BLOCK_SIZE_FACTOR : "Block size factor cannot be greater than 16 (256 MiB)."
+@param [in] key : "The raw key used to encrypt the new MFTAH payload."
+@param crypto_type : "The crypto type used to encrypt the new MFTAH payload."
+@param block_size_factor : "Controls the approximate stream block size: a memory chunk allocated for revolving in/out data."
+@param next_block_callback : "A function which provides a slice pointer to the next block of plaintext input data."
+@param yield_callback : "A function which accepts encrypted stream data in chunks, to store to disk or offload elsewhere."
+
+@require block_size_factor >= MIN_STREAM_BLOCK_SIZE_FACTOR : "Block size factor cannot be smaller than 1 (16 MiB)."
+@require block_size_factor <= MAX_STREAM_BLOCK_SIZE_FACTOR : "Block size factor cannot be greater than 16 (256 MiB)."
 *>
-fn void? stream_new(MftahStreamRequest request)
+fn void? stream_new(char[] key, MftahCryptoType crypto_type, char block_size_factor,
+    FnStreamReadNextBlock next_block_callback, FnStreamYieldBlock yield_callback)
 {
-    ulong stream_block_size = (((ulong)request.block_size_factor << 4) + 1) * (1024 * 1024);
+    ulong stream_block_size = (((ulong)block_size_factor << 4) + 1) * (1024 * 1024);
     ulong bytes_counter = 0;
     ulong block_counter = 0;
     ulong original_payload_length = 0;
     char seed_step_counter = 0;
 
     Payload p;
-    p.init(request.hooks, request.crypto_type)!;
+    p.init(crypto_type)!;
     defer p.destroy();
 
     // Set up the constructed payload header. A streamed MFTAH payload consists of a 'start' header and a 'tail' header.
     //   The former has most of the base payload information present, but fills out o_hmac, w_hmac, etc. with 0xFF bytes.
     //   The payload allocation is extended a bit to align the distance from the ENCRYPT_OFFSET to the end to 128 bytes.
-    p.header_start = request.hooks.malloc(PayloadHeader.sizeof);
+    p.header_start = malloc(PayloadHeader.sizeof);
     if (null == p.header_start) return OUT_OF_RESOURCES?;
 
     PayloadHeader* hdr = @init_header(p.header_start);
-    PayloadHeader* enc_hdr = request.hooks.malloc(PayloadHeader.sizeof);   // copies the 'true' header and gets encrypted
-    hdr.crypto_type = request.crypto_type;
-    hdr.stream_flags = { .enabled = true, .canary = false, .size_factor = request.block_size_factor };
+    PayloadHeader* enc_hdr = malloc(PayloadHeader.sizeof);   // copies the 'true' header and gets encrypted
+    hdr.crypto_type = crypto_type;
+    hdr.stream_flags = { .enabled = true, .canary = false, .size_factor = block_size_factor };
     char[NONCE_LEN] nonce; nonce[..] = hdr.nonce[..];
     seed_step_counter = hdr.nonce_seed_step;
 
     defer {
-        request.hooks.free(hdr);
-        request.hooks.free(enc_hdr);
+        free(hdr);
+        free(enc_hdr);
     }
 
     // Initialize pw hasher, HMAC, and crypto services.
     p.digest_service.iface_init();
-    char[] digested_key = p.digest_service.iface_digest(request.key)[:p.digest_service.iface_hashlen()];
+    char[] digested_key = p.digest_service.iface_digest(key)[:p.digest_service.iface_hashlen()];
 
     p.o_hmac_service.iface_init(digested_key);
     p.w_hmac_service.iface_init(digested_key);
@@ -425,7 +387,7 @@ fn void? stream_new(MftahStreamRequest request)
     (void)p.crypto_service.encrypt_mut(((char*)enc_hdr)[HEADER_ENCRYPT_OFFSET : HEADER_ENCRYPT_LENGTH])!;
 
     // The encrypted header should be immediately yielded back to the caller on its own.
-    request.yield_callback(util::@aob(enc_hdr));
+    yield_callback(util::@aob(enc_hdr));
     bytes_counter += PayloadHeader.sizeof;
 
     // Also, update the Wrapper HMAC to consume the initial header.
@@ -435,7 +397,7 @@ fn void? stream_new(MftahStreamRequest request)
     //   Streaming mode DOES NOT roll the nonce because it's a fully synchronous operation.
     bool exit_loop = false;
     do OUTER: {
-        char[] this_block = request.next_block_callback(stream_block_size);
+        char[] this_block = next_block_callback(stream_block_size);
 
         // Should always prep to exit the loop when a full stream block wasn't received.
         exit_loop = this_block.len < stream_block_size;
@@ -481,7 +443,7 @@ fn void? stream_new(MftahStreamRequest request)
         p.crypto_service.encrypt_mut(this_block)!;   // encrypt
         p.w_hmac_service.iface_update(this_block);   // consume W-HMAC contents
 
-        request.yield_callback(this_block);   // emit
+        yield_callback(this_block);   // emit
         bytes_counter += this_block.len;   // measure
         ++block_counter;
     } while (!exit_loop);
@@ -501,18 +463,18 @@ fn void? stream_new(MftahStreamRequest request)
     *enc_hdr = *hdr;
     (void)p.crypto_service.encrypt_mut(((char*)enc_hdr)[HEADER_ENCRYPT_OFFSET : HEADER_ENCRYPT_LENGTH])!;
 
-    request.yield_callback(util::@aob(enc_hdr));
+    yield_callback(util::@aob(enc_hdr));
 
     p.w_hmac_service.iface_update(util::@aob(enc_hdr));
 
     // Finally emit the O_HMAC, followed by the finalized W_HMAC.
-    request.yield_callback(o_hmac);
+    yield_callback(o_hmac);
     p.w_hmac_service.iface_update(o_hmac);
-    request.yield_callback(p.w_hmac_service.iface_final());
+    yield_callback(p.w_hmac_service.iface_final());
 }
 
 
-fn void? stream_decrypt(HooksTable hooks, char[] key,
+fn void? stream_decrypt(char[] key,
     FnStreamReadNextBlock next_block_callback, FnStreamYieldBlock yield_callback)
 {
     // Read in the initial header and make sure this is a valid STREAMED MFTAH PAYLOAD.
@@ -523,7 +485,7 @@ fn void? stream_decrypt(HooksTable hooks, char[] key,
     if (initial_header.len < PayloadHeader.sizeof) return MISSING_PAYLOAD_HEADER?;
 
     if (HEADER_MAGIC != initial_header[:HEADER_MAGIC.len]) return INVALID_PAYLOAD_MAGIC?;
-    if (in_hdr.crypto_type < CryptoType.values[0] || in_hdr.crypto_type > CryptoType.values[^1]) return INVALID_CRYPTO_TYPE?;
+    if (in_hdr.crypto_type < MftahCryptoType.values[0] || in_hdr.crypto_type > MftahCryptoType.values[^1]) return INVALID_CRYPTO_TYPE?;
 
     if (!in_hdr.stream_flags.enabled || in_hdr.stream_flags.canary) return PAYLOAD_NOT_STREAMED?;
     if (in_hdr.stream_flags.size_factor < MIN_STREAM_BLOCK_SIZE_FACTOR
@@ -531,7 +493,7 @@ fn void? stream_decrypt(HooksTable hooks, char[] key,
 
     // Initialize the 'payload' object.
     Payload p;
-    p.init(hooks, in_hdr.crypto_type)!;
+    p.init(in_hdr.crypto_type)!;
     defer p.destroy();
 
     char[NONCE_LEN] nonce; nonce[..] = in_hdr.nonce[..];
@@ -566,7 +528,7 @@ fn void? stream_decrypt(HooksTable hooks, char[] key,
     //   the last block. It's thus split between them, and we need to be able to recover the full header when the
     //   final block is < PayloadHeader.sizeof. The 2x HMACs are added as well, since they follow the final header...
     usz trailer_size = PayloadHeader.sizeof + (2 * p.o_hmac_service.iface_hashlen());
-    PayloadHeader* tail_hdr = hooks.malloc(trailer_size);
+    PayloadHeader* tail_hdr = malloc(trailer_size);
     if (null == tail_hdr) return OUT_OF_RESOURCES?;
     defer free(tail_hdr);
 

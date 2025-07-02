@@ -74,16 +74,5 @@ fn void main()
     out_file.seek(0)!!;
     defer out_file.close()!!;
 
-    HooksTable hooks = {
-        .malloc = &libc::malloc,
-        .calloc = &libc::calloc,
-        .realloc = &libc::realloc,
-        .memcpy = &libc::memcpy,
-        .memset = &libc::memset,
-        .memmove = &libc::memmove,
-        .memcmp = &libc::memcmp,
-        .free   = &free,
-    };
-
-    mftah::stream_decrypt(hooks, key, &next_block, &yield)!!;
+    mftah::stream_decrypt(key, &next_block, &yield)!!;
 }

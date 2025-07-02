@@ -97,16 +97,6 @@ fn void main()
 
     // return;
 
-    HooksTable hooks = {
-        .malloc = &libc::malloc,
-        .calloc = &libc::calloc,
-        .realloc = &libc::realloc,
-        .memcpy = &libc::memcpy,
-        .memset = &libc::memset,
-        .memmove = &libc::memmove,
-        .memcmp = &libc::memcmp,
-        .free   = &free,
-    };
 
-    mftah::stream_new({ hooks, key, CryptoType.AES_256_CBC_HMAC_SHA256, 1, &next_block, &yield })!!;
+    mftah::stream_new(key, MftahCryptoType.AES_256_CBC_HMAC_SHA256, 1, &next_block, &yield)!!;
 }
