@@ -164,7 +164,7 @@ interface CryptoProvider
 struct WorkOrder @local
 {
     char[]              input;
-    char[]              key;
+    char[]              digested_key;
     bool                is_encrypt;
     uint                thread_index;
     PayloadHeader*      raw_header;
@@ -340,6 +340,7 @@ fn void* thread_crypt(void* context) @local
     defer free(digest_service);
 
     usz iv_size = crypto_service.iv_size();
+    crypto_service.iface_init(order.digested_key, order.raw_header.nonce[:iv_size])!!;
 
     // Local nonce updates based on thread_index..
     char[] prev_hash = {};
@@ -512,6 +513,7 @@ io::printf("full_encrypted_length(%d)\n", full_encrypted_length);
                 (payload_start + (thread * schedule_span))
                 : ((thread + 1) == thread_count ? schedule_remaining_length : schedule_span)
             ],
+            .digested_key = digested_key,
             .is_encrypt = true,
             .thread_index = thread,
             .raw_header = enc_hdr,
@@ -529,7 +531,7 @@ io::printf("full_encrypted_length(%d)\n", full_encrypted_length);
     }
 
     // W-HMAC: Consume the rest of the payload. The W-HMAC is set 'in the clear' on the payload header.
-    ctx.w_hmac_service.iface_update(payload[(payload_start - 1)..]);
+    ctx.w_hmac_service.iface_update(payload[leader_length..]);
     char[] w_hmac = ctx.w_hmac_service.iface_final();
     defer free(w_hmac.ptr);
     payload[hdr.wrapper_digest_offset : w_hmac_size] = w_hmac[:w_hmac_size];

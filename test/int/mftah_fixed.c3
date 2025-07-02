@@ -54,4 +54,6 @@ fn void main()
 
     io::printn("Writing out-file...");
     out_file.write(result)!!;
+
+    free(result.ptr);
 }
