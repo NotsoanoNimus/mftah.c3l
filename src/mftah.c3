@@ -30,6 +30,7 @@
 module mftah;
 
 import mftah::util @public;
+import mftah::threading;
 
 
 struct MftahVersion @packed
@@ -100,8 +101,8 @@ struct PayloadHeader @packed
     char                nonce_seed_step;                    // 15
     char[NONCE_LEN]     nonce;
     // Items below are always ENCRYPTED for MFTAH files.
-    uint                wrapper_digest_offset;              // 80..83
     uint                original_digest_offset;             // 84..87
+    uint                wrapper_digest_offset;              // 80..83
     ulong               payload_start;                      // 88..95
     ulong               payload_length;                     // 96..103
     union
@@ -163,10 +164,10 @@ interface CryptoProvider
 struct WorkOrder @local
 {
     char[]              input;
+    char[]              key;
     bool                is_encrypt;
-    MftahCryptoType     crypto_type;
     uint                thread_index;
-    bool                suppress_progress;
+    PayloadHeader*      raw_header;
 }
 
 
@@ -253,6 +254,24 @@ macro void? @set_payload_services(
     }
 }
 
+macro CryptoProvider? @get_crypto_service(crypto_type)
+{
+    switch (crypto_type) {
+        case AES_256_CBC_HMAC_SHA256: return (AesCtx*)malloc(AesCtx.sizeof);
+        case CHACHA20_POLY1305: return (ChaCha20*)malloc(ChaCha20.sizeof);
+        default: return mftah::INVALID_CRYPTO_TYPE?;
+    }
+}
+
+macro DigestProvider? @get_digest_service(crypto_type)
+{
+    switch (crypto_type) {
+        case AES_256_CBC_HMAC_SHA256: return (Sha256*)malloc(Sha256.sizeof);
+        case CHACHA20_POLY1305: return (Sha512*)malloc(Sha512.sizeof);
+        default: return mftah::INVALID_CRYPTO_TYPE?;
+    }
+}
+
 
 <*
 Initialize the MFTAH context with details about a buffer of
@@ -267,8 +286,11 @@ fn void? MftahContext.init(&self, MftahCryptoType crypto_type)
     self.prng.init();
 
     @set_payload_services(
-        crypto_type, self.digest_service, self.o_hmac_service,
-        self.w_hmac_service, self.crypto_service
+        crypto_type,
+        self.digest_service,
+        self.o_hmac_service,
+        self.w_hmac_service,
+        self.crypto_service
     )!;
 
     self.is_initialized = true;
@@ -308,22 +330,197 @@ fn void MftahContext.generate_random_data(&self, char[] destination, usz length)
 }
 
 
+fn void* thread_crypt(void* context) @local
+{
+    WorkOrder* order = context;
+
+    CryptoProvider crypto_service = @get_crypto_service(order.raw_header.crypto_type)!!;
+    defer free(crypto_service);
+    DigestProvider digest_service = @get_digest_service(order.raw_header.crypto_type)!!;
+    defer free(digest_service);
+
+    usz iv_size = crypto_service.iv_size();
+
+    // Local nonce updates based on thread_index..
+    char[] prev_hash = {};
+    char[] current_iv = order.raw_header.nonce[:iv_size];
+    defer free(current_iv.ptr);
+
+    for (usz i = 0; i < (order.thread_index + 1); ++i) {
+        current_iv = digest_service.iface_digest(i == 0 ? current_iv : prev_hash)[:iv_size];
+        if (prev_hash.ptr) free(prev_hash.ptr);
+        prev_hash = current_iv;
+    }
+
+    if (order.is_encrypt) {
+        crypto_service.encrypt_mut(order.input)!!;
+    } else {
+        crypto_service.decrypt_mut(order.input)!!;
+    }
+
+    return null;
+}
+
 <*
 Encrypt a static, in-memory MFTAH payload from a char slice.
 
-@param payload : "The input data to encrypt in-place."
-@param key : "The symmetric key to use when encrypting the payload."
+@param [inout] payload : "The heap-allocated input data to encrypt in-place."
+@param [in] key : "The symmetric key to use when encrypting the payload."
 @param crypto_type : "The predefined MFTAH crypto algorithm suite used to encrypt (and thus decrypt) the payload."
 @param thread_count : "The amount of simultaneous threads - or parallel crypto operations - to use when encrypting the payload."
+@param payload_start_offset : "How many randomized bytes to insert between the end of the MFTAH payload's new header and the start of the encrypted payload."
 
 @require payload.len > 0 : "The payload cannot be empty."
 @require key.len > 0 : "The key cannot be empty."
-@require thread_count > 0 : "The thread count must be at least 1."
+@require thread_count > 0 && thread_count <= 64 : "The thread count must be at least 1, but not more than 64."
+@require payload_start_offset < (16*1024*1024) : "Payload start offset cannot be more than 16 MiB from the end of the header."
+
+@return "A slice pointing to the new, encrypted MFTAH payload details."
 *>
-fn void? new(char[] payload, char[] key,
-    MftahCryptoType crypto_type = CHACHA20_POLY1305, char thread_count = 1)
+fn char[]? new(char[] payload, char[] key, MftahCryptoType crypto_type = CHACHA20_POLY1305,
+    char thread_count = 1, ulong payload_start_offset = 0)
 {
-    //
+    MftahContext ctx;
+    ctx.init(crypto_type)!;
+    defer ctx.destroy();
+
+    // Set up the constructed payload header. A streamed MFTAH payload consists of a 'start' header and a 'tail' header.
+    //   The former has most of the base payload information present, but fills out o_hmac, w_hmac, etc. with 0xFF bytes.
+    //   The payload allocation is extended a bit to align the distance from the ENCRYPT_OFFSET to the end to 128 bytes.
+    ctx.header_start = malloc(PayloadHeader.sizeof);
+    if (null == ctx.header_start) return OUT_OF_RESOURCES?;
+
+    PayloadHeader* hdr = @init_header(ctx.header_start);
+    defer free(hdr);
+
+    usz digest_size = ctx.digest_service.iface_hashlen();
+    usz block_size = ctx.crypto_service.block_size();
+    usz iv_size = ctx.crypto_service.iv_size();
+    usz o_hmac_size = ctx.o_hmac_service.iface_hashlen();
+    usz w_hmac_size = ctx.w_hmac_service.iface_hashlen();
+
+    // Initialize services.
+    ctx.digest_service.iface_init();
+    char[] digested_key = ctx.digest_service.iface_digest(key)[:digest_size];
+    defer free(digested_key.ptr);
+
+    ctx.o_hmac_service.iface_init(digested_key);
+    ctx.w_hmac_service.iface_init(digested_key);
+    ctx.crypto_service.iface_init(digested_key, hdr.nonce[:iv_size])!;
+
+    // Adjust for extra leading space required by the payload.
+    ulong required_hmac_space = o_hmac_size;
+    ulong block_padding = ($offsetof(hdr.extra_space) + required_hmac_space) % block_size
+        ? (block_size - (($offsetof(hdr.extra_space) + required_hmac_space) % block_size))
+        : 0;
+    long extra_length_needed = (required_hmac_space + block_padding) - hdr.extra_space.len;
+
+    if (extra_length_needed > 0) {
+        // Reallocate the hdr to accommodate the new space requirement.
+        ctx.header_start = hdr = realloc(hdr, PayloadHeader.sizeof + extra_length_needed);
+        if (null == hdr) return OUT_OF_RESOURCES?;
+    } else {
+        extra_length_needed = 0;
+    }
+
+    // Before padding, fully digest the input payload as-is to create the O-HMAC.
+    ctx.o_hmac_service.iface_update(payload);
+    char[] o_hmac = ctx.o_hmac_service.iface_final();
+    defer free(o_hmac.ptr);
+    util::@aob(hdr)[$offsetof(hdr.extra_space) : o_hmac_size] = o_hmac[:o_hmac_size];
+
+    // Pad the input payload. For block ciphers, this reallocates the pointer and extends the length.
+    payload = ctx.crypto_service.pad(payload)!;
+
+    // Keep the actual payload on a block_size boundary.
+    payload_start_offset = (PayloadHeader.sizeof + extra_length_needed + w_hmac_size + payload_start_offset) % block_size
+        ? (payload_start_offset + (block_size - ((PayloadHeader.sizeof + extra_length_needed + w_hmac_size + payload_start_offset) % block_size)))
+        : payload_start_offset;
+    ulong payload_start = PayloadHeader.sizeof + extra_length_needed + w_hmac_size + payload_start_offset;
+    ulong payload_length = payload.len;
+
+    // Set payload fields.
+    hdr.crypto_type = crypto_type;
+    hdr.stream_flags.enabled = false;
+    hdr.stream_flags.canary = true;
+    hdr.stream_flags.size_factor = 0;
+    hdr.original_digest_offset = $offsetof(hdr.extra_space);
+    hdr.wrapper_digest_offset = PayloadHeader.sizeof + (uint)extra_length_needed;
+    hdr.payload_start = payload_start;
+    hdr.payload_length = payload_length;
+    hdr.chunk_count = thread_count;
+
+    // Initially, the payload header as its W-HMAC set to all 0xFF values while calculating the W-HMAC itself.
+    for (usz i = 0; i < w_hmac_size; ++i) util::@aob(hdr)[hdr.wrapper_digest_offset + i] = 0xFF;
+
+    // Create the resultant payload container from the original pointer (through realloc).
+    PayloadHeader* enc_hdr = realloc(payload.ptr, payload_length);
+    if (null == enc_hdr) return OUT_OF_RESOURCES?;
+    // defer free(enc_hdr);   // NOTE: this frees the whole payload pointer, so it's not done...
+    payload = util::@aob(enc_hdr)[:payload_length];
+
+    // Encrypt the start header at the encryption boundary.
+    *enc_hdr = *hdr;
+    (void)ctx.crypto_service.encrypt_mut(payload[HEADER_ENCRYPT_OFFSET : HEADER_ENCRYPT_LENGTH + extra_length_needed])!;
+
+    // Randomize data between W-HMAC end and start of payload.
+    if (payload_start_offset > 0) {
+        ulong start = PayloadHeader.sizeof + extra_length_needed + w_hmac_size;
+        for (usz i = 0; i < payload_start_offset; ++i) payload[start + i] = (char)(ctx.prng.next() & 0xFF);
+    }
+
+    // W-HMAC: Consume the header up to the payload start.
+    ctx.w_hmac_service.iface_update(payload[:hdr.wrapper_digest_offset]);
+
+    // Time to vectorize encryption. Since IVs get mixed and aren't reused, this even works with something like AES-CBC!
+    Pthread_t[] thread_pool = ((Pthread_t*)calloc(Pthread_t.sizeof * thread_count))[:thread_count];
+    if (null == thread_pool.ptr) return OUT_OF_RESOURCES?;
+    defer free(thread_pool);
+
+    WorkOrder*[] work_orders = ((WorkOrder**)calloc(WorkOrder*.sizeof * thread_count))[:thread_count];
+    if (null == work_orders.ptr) return OUT_OF_RESOURCES?;
+    defer free(work_orders);
+
+    ulong schedule_remaining_length = payload_length;
+    ulong schedule_span = (payload_length / thread_count);
+
+    // When the size of each scheduled thread's content is 0, too many threads were requested so just use one.
+    if (!schedule_span) {
+        schedule_span = payload_length;
+        thread_count = 1;
+    }
+
+    for (uint thread = 0; thread < thread_count; ++thread) {
+        work_orders[thread] = malloc(WorkOrder.sizeof);
+        if (null == work_orders[thread]) return OUT_OF_RESOURCES?;
+
+        *(work_orders[thread]) = {
+            .input = payload[
+                (payload_start + (thread * schedule_span))
+                : ((thread+1) == thread_count ? schedule_remaining_length : schedule_span)
+            ],
+            .is_encrypt = true,
+            .thread_index = thread,
+            .raw_header = enc_hdr,
+        };
+
+        (void)threading::pthread_create(&thread_pool[thread], null, &thread_crypt, work_orders[thread]);
+    }
+
+    // Await all threads.
+    for (usz thread = 0; thread < thread_count; ++thread) {
+        (void)threading::pthread_join(thread_pool[thread], null);
+        free(work_orders[thread]);
+    }
+
+    // W-HMAC: Consume the rest of the payload. The W-HMAC is set 'in the clear' on the payload header.
+    ctx.w_hmac_service.iface_update(payload[(payload_start - 1)..]);
+    char[] w_hmac = ctx.w_hmac_service.iface_final();
+    defer free(w_hmac.ptr);
+    payload[hdr.wrapper_digest_offset : w_hmac_size] = w_hmac[:w_hmac_size];
+
+    // All done!
+    return payload;
 }
 
 
@@ -409,7 +606,6 @@ fn void? stream_new(char[] key, MftahCryptoType crypto_type, char block_size_fac
 
     // Encrypt the start header at the encryption boundary.
     //   Any important values should be updated/read from the true, never-emitted header: 'hdr'.
-    // TODO: This encrypt call may need to pad if the enc_hdr is not an even block_size for the block cipher.
     *enc_hdr = *hdr;
     (void)ctx.crypto_service.encrypt_mut(((char*)enc_hdr)[HEADER_ENCRYPT_OFFSET : HEADER_ENCRYPT_LENGTH])!;
 
