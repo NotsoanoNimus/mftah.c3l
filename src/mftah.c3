@@ -361,6 +361,7 @@ fn void* thread_crypt(void* context) @local
     return null;
 }
 
+import std::io;
 <*
 Encrypt a static, in-memory MFTAH payload from a char slice.
 
@@ -393,16 +394,19 @@ fn char[]? new(char[] payload, char[] key, MftahCryptoType crypto_type = CHACHA2
     PayloadHeader* hdr = @init_header(ctx.header_start);
     defer free(hdr);
 
+    // Store sizes from provider interfaces (these calls can get expensive).
     usz digest_size = ctx.digest_service.iface_hashlen();
     usz block_size = ctx.crypto_service.block_size();
     usz iv_size = ctx.crypto_service.iv_size();
     usz o_hmac_size = ctx.o_hmac_service.iface_hashlen();
     usz w_hmac_size = ctx.w_hmac_service.iface_hashlen();
+io::printf("=== SIZES : digest(%d) / block(%d) / iv(%d) / O-HMAC(%d) / W-HMAC(%d)\n", digest_size, block_size, iv_size, o_hmac_size, w_hmac_size);
 
     // Initialize services.
     ctx.digest_service.iface_init();
     char[] digested_key = ctx.digest_service.iface_digest(key)[:digest_size];
     defer free(digested_key.ptr);
+io::printn("digested_key:"); util::@slicedump(digested_key);
 
     ctx.o_hmac_service.iface_init(digested_key);
     ctx.w_hmac_service.iface_init(digested_key);
@@ -414,30 +418,38 @@ fn char[]? new(char[] payload, char[] key, MftahCryptoType crypto_type = CHACHA2
         ? (block_size - (($offsetof(hdr.extra_space) + required_hmac_space) % block_size))
         : 0;
     long extra_length_needed = (required_hmac_space + block_padding) - hdr.extra_space.len;
+    if (extra_length_needed < 0) extra_length_needed = 0;
+io::printf("=== SPACE : required_hmac_space(%d) / block_padding(%d) / extra_length_needed(%d) / ", required_hmac_space, block_padding, extra_length_needed);
 
-    if (extra_length_needed > 0) {
-        // Reallocate the hdr to accommodate the new space requirement.
-        ctx.header_start = hdr = realloc(hdr, PayloadHeader.sizeof + extra_length_needed);
-        if (null == hdr) return OUT_OF_RESOURCES?;
-    } else {
-        extra_length_needed = 0;
-    }
+    // The 'leader' is the header + extra + W-HMAC space, BEFORE the extra padding requested by the user.
+    ulong leader_length = PayloadHeader.sizeof + extra_length_needed + w_hmac_size;
+io::printf("leader_length(%d)\n", leader_length);
+
+    ctx.header_start = hdr = realloc(hdr, leader_length);
+    if (null == hdr) return OUT_OF_RESOURCES?;
+    char[] leader = util::@aob(hdr, leader_length);
 
     // Before padding, fully digest the input payload as-is to create the O-HMAC.
     ctx.o_hmac_service.iface_update(payload);
     char[] o_hmac = ctx.o_hmac_service.iface_final();
     defer free(o_hmac.ptr);
-    util::@aob(hdr)[$offsetof(hdr.extra_space) : o_hmac_size] = o_hmac[:o_hmac_size];
+    leader[$offsetof(hdr.extra_space) : o_hmac_size] = o_hmac[:o_hmac_size];
+io::printn("calculated O-HMAC:"); util::@slicedump(o_hmac);
 
     // Pad the input payload. For block ciphers, this reallocates the pointer and extends the length.
+io::printf("=== PAYLOAD_LEN : original(%d) / ", payload.len);
     payload = ctx.crypto_service.pad(payload)!;
+io::printf("padded(%d)\n", payload.len);
 
-    // Keep the actual payload on a block_size boundary.
-    payload_start_offset = (PayloadHeader.sizeof + extra_length_needed + w_hmac_size + payload_start_offset) % block_size
-        ? (payload_start_offset + (block_size - ((PayloadHeader.sizeof + extra_length_needed + w_hmac_size + payload_start_offset) % block_size)))
+    // Adjust this start offset to keep the actual payload on a block_size boundary.
+    payload_start_offset = (leader_length + payload_start_offset) % block_size
+        ? (payload_start_offset + (block_size - ((leader_length + payload_start_offset) % block_size)))
         : payload_start_offset;
-    ulong payload_start = PayloadHeader.sizeof + extra_length_needed + w_hmac_size + payload_start_offset;
+
+    ulong payload_start = leader_length + payload_start_offset;
     ulong payload_length = payload.len;
+io::printf("=== MEASUREMENTS : payload_start_offset(%d) / payload_start(%d) / payload_length(%d) / thread_count(%d) / ",
+    payload_start_offset, payload_start, payload_length, thread_count);
 
     // Set payload fields.
     hdr.crypto_type = crypto_type;
@@ -445,28 +457,29 @@ fn char[]? new(char[] payload, char[] key, MftahCryptoType crypto_type = CHACHA2
     hdr.stream_flags.canary = true;
     hdr.stream_flags.size_factor = 0;
     hdr.original_digest_offset = $offsetof(hdr.extra_space);
-    hdr.wrapper_digest_offset = PayloadHeader.sizeof + (uint)extra_length_needed;
+    hdr.wrapper_digest_offset = (uint)leader_length - (uint)w_hmac_size;
     hdr.payload_start = payload_start;
     hdr.payload_length = payload_length;
     hdr.chunk_count = thread_count;
 
-    // Initially, the payload header as its W-HMAC set to all 0xFF values while calculating the W-HMAC itself.
-    for (usz i = 0; i < w_hmac_size; ++i) util::@aob(hdr)[hdr.wrapper_digest_offset + i] = 0xFF;
+    ulong full_encrypted_length = payload_start + payload_length;
+io::printf("full_encrypted_length(%d)\n", full_encrypted_length);
 
     // Create the resultant payload container from the original pointer (through realloc).
-    PayloadHeader* enc_hdr = realloc(payload.ptr, payload_length);
+    PayloadHeader* enc_hdr = realloc(payload.ptr, full_encrypted_length);
     if (null == enc_hdr) return OUT_OF_RESOURCES?;
     // defer free(enc_hdr);   // NOTE: this frees the whole payload pointer, so it's not done...
-    payload = util::@aob(enc_hdr)[:payload_length];
+    payload = util::@aob(enc_hdr, full_encrypted_length);
+    payload[payload_start..] = payload[:payload_length];   // move the original payload contents up to the start within the buffer
+    payload[:leader_length] = leader[..];
 
     // Encrypt the start header at the encryption boundary.
-    *enc_hdr = *hdr;
-    (void)ctx.crypto_service.encrypt_mut(payload[HEADER_ENCRYPT_OFFSET : HEADER_ENCRYPT_LENGTH + extra_length_needed])!;
+    // *enc_hdr = *hdr;
+    ctx.crypto_service.encrypt_mut(payload[HEADER_ENCRYPT_OFFSET : HEADER_ENCRYPT_LENGTH + extra_length_needed])!;
 
     // Randomize data between W-HMAC end and start of payload.
     if (payload_start_offset > 0) {
-        ulong start = PayloadHeader.sizeof + extra_length_needed + w_hmac_size;
-        for (usz i = 0; i < payload_start_offset; ++i) payload[start + i] = (char)(ctx.prng.next() & 0xFF);
+        for (usz i = 0; i < payload_start_offset; ++i) payload[leader_length + i] = (char)(ctx.prng.next() & 0xFF);
     }
 
     // W-HMAC: Consume the header up to the payload start.
@@ -497,7 +510,7 @@ fn char[]? new(char[] payload, char[] key, MftahCryptoType crypto_type = CHACHA2
         *(work_orders[thread]) = {
             .input = payload[
                 (payload_start + (thread * schedule_span))
-                : ((thread+1) == thread_count ? schedule_remaining_length : schedule_span)
+                : ((thread + 1) == thread_count ? schedule_remaining_length : schedule_span)
             ],
             .is_encrypt = true,
             .thread_index = thread,
@@ -505,6 +518,8 @@ fn char[]? new(char[] payload, char[] key, MftahCryptoType crypto_type = CHACHA2
         };
 
         (void)threading::pthread_create(&thread_pool[thread], null, &thread_crypt, work_orders[thread]);
+
+        schedule_remaining_length -= schedule_span;
     }
 
     // Await all threads.

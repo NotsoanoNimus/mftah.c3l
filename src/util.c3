@@ -35,7 +35,7 @@ import std::io;
 macro @min(#x, #y) => #x < #y ? #x : #y;
 macro @max(#x, #y) => #x > #y ? #x : #y;
 
-macro char[] @aob(ptr) => ((char*)ptr)[:$sizeof(*ptr)];
+macro char[] @aob(ptr, len = 0) => ((char*)ptr)[:(!len ? $sizeof(*ptr) : len)];
 
 macro @memdump(#ptr, #len, $width = 16)
 {
