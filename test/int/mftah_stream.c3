@@ -29,11 +29,9 @@ import std::io::file;
 import libc;
 
 
-fn void free(void* ptr) => (void)libc::free(ptr);
-
 usz ctr = 0;
-char[] data_const = "test"[:4];
-// char[] data_const = $embed("misc/test_input.data");
+// char[] data_const = "test"[:4];
+char[] data_const = $embed("misc/test_input.data");
 char[] data = {};
 
 File out_file;
@@ -42,7 +40,7 @@ fn char[] next_block(usz block_size)
 {
     if (null == data.ptr) data = calloc(block_size)[:block_size];
 
-    if (ctr >= data_const.len) return malloc(1)[:0];
+    if (ctr >= data_const.len) return {};
 
     usz span = (data_const.len - ctr) < block_size ? (data_const.len - ctr) : block_size;
 
@@ -65,7 +63,6 @@ const ZString IMMUTABLE_STRING = "!";
 
 fn void main()
 {
-    defer free(data);
     char[] key = "applesauce";
     // usz testlen = BLOCK_SIZE*16 + (1024*1024); data_const = calloc(testlen)[:testlen];
 

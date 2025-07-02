@@ -41,11 +41,11 @@ File out_file;
 fn char[] next_block(usz block_size)
 {
     if (block_size != data.len) {
-        free(data);
+        if (null != data.ptr) free(data);
         data = calloc(block_size)[:block_size];
     }
 
-    if (ctr >= data_const.len) return malloc(1)[:0];
+    if (ctr >= data_const.len) return {};
 
     usz span = (data_const.len - ctr) < block_size ? (data_const.len - ctr) : block_size;
 
@@ -66,8 +66,6 @@ fn void yield(char[] data)
 
 fn void main()
 {
-    defer free(data.ptr);
-
     char[] key = "applesauce";
 
     out_file = file::open("/tmp/decrypted_stream.mftah", "w")!!;
