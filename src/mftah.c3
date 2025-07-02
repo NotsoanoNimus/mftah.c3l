@@ -45,10 +45,10 @@ const MftahVersion DYNAMIC_CRYPTO   = { 2, 2, 0x222 };
 const MftahVersion CURRENT_VERSION = DYNAMIC_CRYPTO;
 
 
-enum MftahCryptoType : ushort (inline ushort raw)
+enum MftahCryptoType : (ushort raw)
 {
-    AES_256_CBC_HMAC_SHA256 = 1,
-    CHACHA20_POLY1305  = 2,
+    AES_256_CBC_HMAC_SHA256     = 1,
+    CHACHA20_POLY1305           = 2,
 }
 
 
