@@ -476,6 +476,7 @@ io::printf("full_encrypted_length(%d)\n", full_encrypted_length);
     PayloadHeader* enc_hdr = realloc(payload.ptr, full_encrypted_length);
     if (null == enc_hdr) return OUT_OF_RESOURCES?;
     // defer free(enc_hdr);   // NOTE: this frees the whole payload pointer, so it's not done...
+    // NOTE: POSSIBLE UNDEFINED BEHAVIOR BELOW WHEN SHIFTING THE PAYLOAD CONTENTS UP TO THE 'payload_start' POINT.
     payload = util::@aob(enc_hdr, full_encrypted_length);
     payload[payload_start..] = payload[:payload_length];   // move the original payload contents up to the start within the buffer
     payload[:leader_length] = leader[..];
@@ -503,6 +504,9 @@ io::printf("full_encrypted_length(%d)\n", full_encrypted_length);
 
     ulong schedule_remaining_length = payload_length;
     ulong schedule_span = (payload_length / thread_count);
+
+    // Round to block size
+    schedule_span += (schedule_span % block_size) ? (block_size - (schedule_span % block_size)) : 0;
 
     // When the size of each scheduled thread's content is 0, too many threads were requested so just use one.
     if (!schedule_span) {
@@ -645,6 +649,9 @@ io::printf("=== W-HMAC ok :\n"); util::@slicedump(w_hmac);
     ulong schedule_remaining_length = payload_length;
     ulong schedule_span = (payload_length / thread_count);
 
+    // Round to block size
+    schedule_span += (schedule_span % block_size) ? (block_size - (schedule_span % block_size)) : 0;
+
     // When the size of each scheduled thread's content is 0, too many threads were requested so just use one.
     if (!schedule_span) {
         schedule_span = payload_length;
@@ -681,7 +688,9 @@ io::printf("=== W-HMAC ok :\n"); util::@slicedump(w_hmac);
 
     // Unpad the payload to trim it to the correct length.
     payload = payload[payload_start..];   // trim header from slice, but 'in_hdr' still maintains header info
+io::printf("=== PAYLOAD_LEN : padded(%d) / ", payload.len);
     payload = ctx.crypto_service.unpad(payload)!;
+io::printf("original(%d)\n", payload.len);
 
     // Get the original HMAC and compare.
     ctx.o_hmac_service.iface_update(payload);
