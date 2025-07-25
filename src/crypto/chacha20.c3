@@ -71,6 +71,7 @@ fn char[]? ChaCha20.unpad(&self, char[] input) @dynamic => input;
 
 fn usz ChaCha20.block_size(&self) @dynamic => BLOCK_SIZE;
 fn usz ChaCha20.iv_size(&self) @dynamic => IV_SIZE;
+fn bool ChaCha20.iface_is_block_cipher(&self) @dynamic => false;
 
 
 faultdef

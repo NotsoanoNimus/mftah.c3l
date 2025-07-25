@@ -98,7 +98,6 @@ fn char[]? AesCtx.decrypt_mut(&self, char[] input) @dynamic
 {
 	cbc::decrypt_buffer(self, input, input);
 
-	// return util::@unpkcs7(BLOCKLEN, input);
 	return input;
 }
 
@@ -107,6 +106,7 @@ fn char[]? AesCtx.unpad(&self, char[] input) @dynamic => util::@unpkcs7(BLOCKLEN
 
 fn usz AesCtx.block_size(&self) @dynamic => BLOCKLEN;
 fn usz AesCtx.iv_size(&self) @dynamic => BLOCKLEN;
+fn bool AesCtx.iface_is_block_cipher(&self) @dynamic => true;
 
 
 <*
@@ -169,10 +169,10 @@ fn char[] decrypt(AesCtx *ctx, char[] buf, Allocator allocator) {
 	return out;
 }
 
-fn char[] encrypt_new(AesCtx *ctx, char[] buf) @inline => encrypt(ctx, buf, allocator::heap());
-fn char[] encrypt_temp(AesCtx *ctx, char[] buf) @inline => encrypt(ctx, buf, allocator::temp());
-fn char[] decrypt_new(AesCtx *ctx, char[] buf) @inline => decrypt(ctx, buf, allocator::heap());
-fn char[] decrypt_temp(AesCtx *ctx, char[] buf) @inline => decrypt(ctx, buf, allocator::temp());
+fn char[] encrypt_new(AesCtx *ctx, char[] buf) @inline => encrypt(ctx, buf, mem);
+fn char[] encrypt_temp(AesCtx *ctx, char[] buf) @inline => encrypt(ctx, buf, tmem);
+fn char[] decrypt_new(AesCtx *ctx, char[] buf) @inline => decrypt(ctx, buf, mem);
+fn char[] decrypt_temp(AesCtx *ctx, char[] buf) @inline => decrypt(ctx, buf, tmem);
 
 <*
 @param [&inout] ctx : "AES context."
@@ -253,10 +253,10 @@ fn char[] decrypt(AesCtx *ctx, char[] buf, Allocator allocator) {
 	return out;
 }
 
-fn char[] encrypt_new(AesCtx *ctx, char[] buf) @inline => encrypt(ctx, buf, allocator::heap());
-fn char[] encrypt_temp(AesCtx *ctx, char[] buf) @inline => encrypt(ctx, buf, allocator::temp());
-fn char[] decrypt_new(AesCtx *ctx, char[] buf) @inline => decrypt(ctx, buf, allocator::heap());
-fn char[] decrypt_temp(AesCtx *ctx, char[] buf) @inline => decrypt(ctx, buf, allocator::temp());
+fn char[] encrypt_new(AesCtx *ctx, char[] buf) @inline => encrypt(ctx, buf, mem);
+fn char[] encrypt_temp(AesCtx *ctx, char[] buf) @inline => encrypt(ctx, buf, tmem);
+fn char[] decrypt_new(AesCtx *ctx, char[] buf) @inline => decrypt(ctx, buf, mem);
+fn char[] decrypt_temp(AesCtx *ctx, char[] buf) @inline => decrypt(ctx, buf, tmem);
 
 fn void xor_with_iv(char[] buf, char[] iv) @local
 {
@@ -339,10 +339,10 @@ fn char[] decrypt(AesCtx *ctx, char[] buf, Allocator allocator) {
 	return out;
 }
 
-fn char[] encrypt_new(AesCtx *ctx, char[] buf) @inline => encrypt(ctx, buf, allocator::heap());
-fn char[] encrypt_temp(AesCtx *ctx, char[] buf) @inline => encrypt(ctx, buf, allocator::temp());
-fn char[] decrypt_new(AesCtx *ctx, char[] buf) @inline => decrypt(ctx, buf, allocator::heap());
-fn char[] decrypt_temp(AesCtx *ctx, char[] buf) @inline => decrypt(ctx, buf, allocator::temp());
+fn char[] encrypt_new(AesCtx *ctx, char[] buf) @inline => encrypt(ctx, buf, mem);
+fn char[] encrypt_temp(AesCtx *ctx, char[] buf) @inline => encrypt(ctx, buf, tmem);
+fn char[] decrypt_new(AesCtx *ctx, char[] buf) @inline => decrypt(ctx, buf, mem);
+fn char[] decrypt_temp(AesCtx *ctx, char[] buf) @inline => decrypt(ctx, buf, tmem);
 
 <*
 @param [&inout] ctx : "AES context."

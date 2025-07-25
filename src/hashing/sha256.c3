@@ -42,7 +42,7 @@ struct Sha256 (DigestProvider)
 
 alias HmacSha256    = Hmac{Sha256, HASH_SIZE, BLOCK_SIZE};
 alias hmac          = hmac::hash{Sha256, HASH_SIZE, BLOCK_SIZE};
-// alias pbkdf2        = hmac::pbkdf2{Sha256, HASH_SIZE, BLOCK_SIZE};
+alias pbkdf2        = hmac::pbkdf2{Sha256, HASH_SIZE, BLOCK_SIZE};
 
 
 fn usz Sha256.iface_hashlen(&self) @dynamic => HASH_SIZE;
@@ -52,7 +52,6 @@ fn char* Sha256.iface_final(&self) @dynamic
 {
     char[HASH_SIZE] c = self.final();
     char[] mem = malloc(HASH_SIZE)[:HASH_SIZE];
-    // for (usz i = 0; i < HASH_SIZE; ++i) mem[i] = c[i];
     mem[..] = c[..];
     return mem;
 }
@@ -60,7 +59,6 @@ fn char* Sha256.iface_digest(&self, char[] data) @dynamic
 {
     char[HASH_SIZE] c = hash(data);
     char[] mem = malloc(HASH_SIZE)[:HASH_SIZE];
-    // for (usz i = 0; i < HASH_SIZE; ++i) mem[i] = c[i];
     mem[..] = c[..];
     return mem;
 }
