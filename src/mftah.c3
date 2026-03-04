@@ -181,44 +181,41 @@ Perform the most basic initialization of a payload header possible for a new pay
   a process of adding in all signatures and setting to-be-filled data bits to 1. This process ensures that
   fields like the 'stream canary' can be purposefully turned off to indicate a set value.
 *>
-macro PayloadHeader* @init_header(#phdr) @local
+fn void PayloadHeader.init(&self) //@local
 {
 	usz i = 0;
 
 	Xoshiro256pp prng @noinit;
 	prng.init();
 
-	for (i = 0; i < HEADER_MAGIC.len; ++i) #phdr.magic[i] = HEADER_MAGIC[i];
-	for (i = 0; i < HEADER_SIGNATURE.len; ++i) #phdr.signature[i] = HEADER_SIGNATURE[i];
+	for (i = 0; i < HEADER_MAGIC.len; ++i) self.magic[i] = HEADER_MAGIC[i];
+	for (i = 0; i < HEADER_SIGNATURE.len; ++i) self.signature[i] = HEADER_SIGNATURE[i];
 
-	#phdr.crypto_type = (MftahCryptoType)(ushort)(prng.next() & 0xFFFF);
-	#phdr.extra_flags = (MftahExtraFlags)(char)0b0111_1111;
-	#phdr.stream_flags = (MftahStreamFlags)(char)0xFF;
+	self.crypto_type = (MftahCryptoType)(ushort)(prng.next() & 0xFFFF);
+	self.extra_flags = (MftahExtraFlags)(char)0b0111_1111;
+	self.stream_flags = (MftahStreamFlags)(char)0xFF;
 
-	for (i = 0; i < NONCE_LEN; ++i) #phdr.nonce[i] = (char)(prng.next() & 0xFF);
+	for (i = 0; i < NONCE_LEN; ++i) self.nonce[i] = (char)(prng.next() & 0xFF);
 
-	for (i = 0; i < SEEDS_COUNT; ++i) #phdr.nonce_seeds[i] = (char)(prng.next() & 0xFF);
-
+	for (i = 0; i < SEEDS_COUNT; ++i) self.nonce_seeds[i] = (char)(prng.next() & 0xFF);
 
 	// Prevent divide-by-zero crashes.
-	#phdr.nonce_seed_step = (char)(prng.next() & 0xFF);
-	if (0 == #phdr.nonce_seed_step) #phdr.nonce_seed_step = (char)(prng.next() & 0xFF) | 0x01;
+	self.nonce_seed_step = (char)(prng.next() & 0xFF);
+	if (0 == self.nonce_seed_step) self.nonce_seed_step = (char)(prng.next() & 0xFF) | 0x01;
 
-	for (i = 0; i < 80; ++i) #phdr.extra_space[i] = (char)(prng.next() & 0xFF);
+	for (i = 0; i < 80; ++i) self.extra_space[i] = (char)(prng.next() & 0xFF);
 
-	#phdr.version = MftahVersion.CURRENT;
+	self.version = MftahVersion.CURRENT;
 
-	#phdr.wrapper_digest_offset     = (uint)(prng.next() & 0xFFFF_FFFF);
-	#phdr.original_digest_offset    = (uint)(prng.next() & 0xFFFF_FFFF);
-	#phdr.digital_signature_offset  = (uint)(prng.next() & 0xFFFF_FFFF);
-	#phdr.payload_start             = (uint)(prng.next() & 0xFFFF_FFFF);
-	#phdr.payload_length            = prng.next() & 0xFFFF_FFFF_FFFF_FFFF;
+	self.wrapper_digest_offset     = (uint)(prng.next() & 0xFFFF_FFFF);
+	self.original_digest_offset    = (uint)(prng.next() & 0xFFFF_FFFF);
+	self.digital_signature_offset  = (uint)(prng.next() & 0xFFFF_FFFF);
+	self.payload_start             = (uint)(prng.next() & 0xFFFF_FFFF);
+	self.payload_length            = prng.next() & 0xFFFF_FFFF_FFFF_FFFF;
 
 	// Every roll_interval (between 4 and 12) for streamed payloads causes the IV to be hashed and
 	//   the CryptoProvider to be re-initialized. This number is discarded for static/non-streamed payloads.
-	#phdr.roll_interval             = ((char)(prng.next() & 0xFF) % ((12+1) - 4)) + 4;
-
-	return #phdr;
+	self.roll_interval             = ((char)(prng.next() & 0xFF) % ((12+1) - 4)) + 4;
 }
 
 
@@ -383,7 +380,8 @@ fn char[]? new(char[] payload, char[] key, MftahCryptoType crypto_type = CHACHA2
 	ctx.header_start = malloc(PayloadHeader.sizeof);
 	if (null == ctx.header_start) return OUT_OF_RESOURCES~;
 
-	PayloadHeader* hdr = @init_header(ctx.header_start);
+	PayloadHeader* hdr = ctx.header_start;
+	hdr.init();
 	defer free(hdr);
 
 	// Store sizes from provider interfaces (these calls can get expensive).
@@ -732,7 +730,8 @@ fn void? stream_new(char[] key, MftahCryptoType crypto_type, char block_size_fac
 	ctx.header_start = malloc(PayloadHeader.sizeof);
 	if (null == ctx.header_start) return OUT_OF_RESOURCES~;
 
-	PayloadHeader* hdr = @init_header(ctx.header_start);
+	PayloadHeader* hdr = ctx.header_start;
+	hdr.init();
 	defer free(hdr);
 
 	PayloadHeader* enc_hdr = malloc(PayloadHeader.sizeof);   // copies the 'true' header and gets encrypted
