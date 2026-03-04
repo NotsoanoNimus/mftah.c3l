@@ -4,20 +4,20 @@
  *
  * @author Zack Puhl <github@xmit.xyz>
  * @date 2025-06-25
- * 
- * 
+ *
+ *
  * Copyright (c) 2025 Zack Puhl <github@xmit.xyz> - https://github.com/NotsoanoNimus/mftah.c3l
- * 
+ *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
  * in the Software without restriction, including without limitation the rights
  * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
  * copies of the Software, and to permit persons to whom the Software is
  * furnished to do so, subject to the following conditions:
- * 
+ *
  * The above copyright notice and this permission notice shall be included in all
  * copies or substantial portions of the Software.
- * 
+ *
  * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
  * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
  * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
@@ -31,10 +31,6 @@ module mftah::util;
 
 import std::io;
 
-
-macro @min(#x, #y) => #x < #y ? #x : #y;
-macro @max(#x, #y) => #x > #y ? #x : #y;
-
 macro char[] @aob(ptr, len = 0) => ((char*)ptr)[:(!len ? $sizeof(*ptr) : len)];
 
 macro @memdump(#ptr, #len, $width = 16)
@@ -47,15 +43,6 @@ macro @memdump(#ptr, #len, $width = 16)
 
 macro @slicedump(slice, $width = 16)
     => @memdump(slice.ptr, slice.len * $typeof(slice[0]).sizeof, $width);
-
-macro @w($str) @const
-{
-    $if $defined(MFTAH_WIDESTR) :
-        return $$wstr16($str);
-    $else
-        return $str;
-    $endif
-}
 
 
 <*
@@ -75,7 +62,7 @@ macro char[]? @pkcs7(usz block_size, char[] input)
     usz pad_len = block_size - (input.len % block_size);   // note: even-sized inputs get an extra block
 
     char* new_ptr = realloc(input.ptr, input.len + pad_len);
-    if (null == new_ptr) return mftah::OUT_OF_RESOURCES?;
+    if (null == new_ptr) return mftah::OUT_OF_RESOURCES~;
 
     for (usz i = input.len; i < (input.len + pad_len); ++i) new_ptr[i] = (char)(pad_len & 0xFF);
 
@@ -93,13 +80,13 @@ macro char[]? @pkcs7(usz block_size, char[] input)
  *>
 macro char[]? @unpkcs7(usz block_size, char[] input)
 {
-    if (input.len < block_size) return mftah::PAYLOAD_NOT_PADDED?;
+    if (input.len < block_size) return mftah::PAYLOAD_NOT_PADDED~;
 
     // The padding length in PKCS#7 can always be derived from the final byte of the padded plaintext.
     char pad_len = input[^1];
 
     // Of course, the padding length should never exceed the input length or the block size.
-    if (input.len < pad_len || pad_len > block_size) return mftah::INVALID_PAYLOAD_PADDING?;
+    if (input.len < pad_len || pad_len > block_size) return mftah::INVALID_PAYLOAD_PADDING~;
 
     // If padding IS the entire input, return an empty slice.
     //   Else, return the input with the padding trimmed.

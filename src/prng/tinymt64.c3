@@ -81,7 +81,7 @@ union InternalConv @local
  * This function changes internal state of tinymt64.
  *   Users should not call this function directly.
  *>
-fn void TinyMT64.next_state(&self) @local
+fn void TinyMT64.next_state(&self)
 {
     ulong x;
 
@@ -110,7 +110,7 @@ fn void TinyMT64.next_state(&self) @local
  *
  * @return "A 64-bit, unsigned, pseudorandom number"
  *>
-fn ulong TinyMT64.temper(&self) @local
+fn ulong TinyMT64.temper(&self)
 {
     ulong x;
 
@@ -137,7 +137,7 @@ fn ulong TinyMT64.temper(&self) @local
  *
  * @return "floating point number r (1.0 <= r < 2.0)"
  *>
-fn double TinyMT64.temper_conv(&self) @local
+fn double TinyMT64.temper_conv(&self)
 {
     ulong x;
     InternalConv conv;
@@ -169,7 +169,7 @@ fn double TinyMT64.temper_conv(&self) @local
  *
  * @return "floating point number r (1.0 < r < 2.0)"
  *>
-fn double TinyMT64.temper_conv_open(&self) @local
+fn double TinyMT64.temper_conv_open(&self)
 {
     ulong x;
     InternalConv conv;
@@ -323,7 +323,7 @@ fn ulong ini_func2(ulong x) @local => (x ^ (x >> 59)) * 58885565329898161;
 <*
  * This function certificate the period of 2^127-1.
  *>
-fn void TinyMT64.period_certification(&self) @local
+fn void TinyMT64.period_certification(&self)
 {
     if ((self.status[0] & TINYMT64_MASK) == 0 && self.status[1] == 0)
     {

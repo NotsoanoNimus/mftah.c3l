@@ -1,16 +1,16 @@
 /**
  * Copyright (c) 2025 Zack Puhl <github@xmit.xyz> - https://github.com/NotsoanoNimus/mftah.c3l
- * 
+ *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
  * in the Software without restriction, including without limitation the rights
  * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
  * copies of the Software, and to permit persons to whom the Software is
  * furnished to do so, subject to the following conditions:
- * 
+ *
  * The above copyright notice and this permission notice shall be included in all
  * copies or substantial portions of the Software.
- * 
+ *
  * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
  * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
  * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
@@ -32,7 +32,7 @@ import libc;
 fn void free(void* ptr) => (void)libc::free(ptr);
 
 usz ctr = 0;
-char[] data_const = $embed("../../../../../../../../../../tmp/encrypted_stream.mftah");
+char[] data_const = $embed("/tmp/encrypted_stream.mftah");
 char[] data = {};
 
 File out_file;
@@ -59,7 +59,7 @@ fn char[] next_block(usz block_size)
 
 fn void yield(char[] data)
 {
-    util::@slicedump(data[:util::@min(256, data.len)], 32);
+    util::@slicedump(data[:min(256, data.len)], 32);
     out_file.write(data)!!;
 }
 

@@ -1,16 +1,16 @@
 /**
- * Copyright (c) 2025 Zack Puhl <github@xmit.xyz> - https://github.com/NotsoanoNimus/mftah.c3l
- * 
+ * Copyright (c) 2025-2026 Zack Puhl <github@xmit.xyz> - https://github.com/NotsoanoNimus/mftah.c3l
+ *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
  * in the Software without restriction, including without limitation the rights
  * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
  * copies of the Software, and to permit persons to whom the Software is
  * furnished to do so, subject to the following conditions:
- * 
+ *
  * The above copyright notice and this permission notice shall be included in all
  * copies or substantial portions of the Software.
- * 
+ *
  * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
  * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
  * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
@@ -25,35 +25,23 @@ module mftah_fixed_decrypt_test;
 import mftah;
 
 import std::io;
-import libc;
 
+const char[] INCOMING = $embed("/tmp/encrypted_fixed.mftah");
+const char[] KEY = "applesauce";
 
-usz ctr = 0;
-// char[] data_const = "test"[:4];
-char[] data_const = $embed("../../../../../../../../../../tmp/encrypted_fixed.mftah");
-char[] data = {};
-
-File out_file;
-
-
-fn void main()
+fn void main() => @pool()
 {
-    char[] key = "applesauce";
-
     io::printn("Setting up...");
-    data = calloc(data_const.len)[:data_const.len];
-    assert(null != data.ptr);
-    data[..] = data_const[..];
+    char[] data = allocator::alloc_array(mem, char, INCOMING.len)[:INCOMING.len];
+    data[..] = INCOMING[..];
 
-    out_file = file::open("/tmp/decrypted_fixed.mftah", "w")!!;
+    File out_file = file::open("/tmp/decrypted_fixed.mftah", "w")!!;
     out_file.seek(0)!!;
     defer (void)out_file.close();
 
     io::printn("Decrypting input...");
-    char[] result = mftah::decrypt(data, key)!!;
+    char[] result = mftah::decrypt(data, KEY)!!;
 
     io::printn("Writing out-file...");
     out_file.write(result)!!;
-
-    free(data.ptr);
 }

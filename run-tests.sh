@@ -13,10 +13,10 @@ fi
 if [[ -z "$1" ]] || [[ -n "$1" && "$1" == "int" ]]; then
     for integration in `find ./test/ -type f -name '*.c3'`; do
         echo -e "\n\n=============================================================\nExecuting integration test '${integration}'..."
-    
+
         c3c compile-run -O3 --libdir .. --lib mftah "${integration}"
-    
+
         artifact="$(basename "${integration}" | sed -r 's/\.c3$//')_test"
-        [[ -e "${artifact}" ]] && \rm "${artifact}" 
+        [[ -e "${artifact}" ]] && \rm "${artifact}"
     done
 fi
