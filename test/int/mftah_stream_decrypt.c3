@@ -72,5 +72,5 @@ fn void main()
     out_file.seek(0)!!;
     defer out_file.close()!!;
 
-    mftah::stream_decrypt(key, &next_block, &yield)!!;
+    mftah::stream_decrypt(mem, key, &next_block, &yield)!!;
 }

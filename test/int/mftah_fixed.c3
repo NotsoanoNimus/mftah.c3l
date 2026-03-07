@@ -40,7 +40,7 @@ fn void main() => @pool()
     defer (void)out_file.close();
 
     io::printn("Encrypting input...");
-    char[] result = mftah::new(data, KEY, CHACHA20_POLY1305, 8, 459)!!;
+    char[] result = mftah::new(mem, data, KEY, CHACHA20_POLY1305, 8, 459)!!;
 
     io::printn("Writing out-file...");
     out_file.write(result)!!;

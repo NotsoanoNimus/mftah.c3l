@@ -40,7 +40,7 @@ fn void main() => @pool()
     defer (void)out_file.close();
 
     io::printn("Decrypting input...");
-    char[] result = mftah::decrypt(data, KEY)!!;
+    char[] result = mftah::decrypt(mem, data, KEY)!!;
 
     io::printn("Writing out-file...");
     out_file.write(result)!!;

@@ -54,6 +54,7 @@ interface HmacDigestProvider
 
 	fn usz iface_hashlen();
 	fn usz iface_keylen();
+	fn usz iface_ivlen();
 }
 
 // Implementing CryptoProvider types are defined in a separate location, but are referenced in this file.
@@ -138,6 +139,7 @@ fn char[] Hmac.iface_final(&self) @dynamic
 }
 fn usz Hmac.iface_hashlen(&self) @dynamic => HASH_BYTES;
 fn usz Hmac.iface_keylen(&self) @dynamic => KEY_BYTES;
+fn usz Hmac.iface_ivlen(&self) @dynamic => KEY_BYTES; // TODO!
 
 // ======================================================================================================
 // Poly1305
@@ -213,6 +215,7 @@ fn char[] Poly1305.iface_final(&self) @dynamic
 }
 fn usz Poly1305.iface_hashlen(&self) @dynamic => poly1305::TAG_SIZE;
 fn usz Poly1305.iface_keylen(&self) @dynamic => poly1305::KEY_SIZE;
+fn usz Poly1305.iface_ivlen(&self) @dynamic => 16;
 
 // ======================================================================================================
 // Sha256
